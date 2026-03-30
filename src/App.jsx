@@ -161,6 +161,15 @@ const FINALS = [
   { id: "FINAL2", stage: "Final", sfA: "SF-03", sfB: "SF-04" },
 ];
 
+const FINAL_MATCHES = 3; // final + final2 + 3er lugar
+
+const TOTAL_MATCHES =
+  GROUP_MATCHES.length +
+  R16.length +
+  QF.length +
+  SF.length +
+  FINAL_MATCHES;
+
 const MATCH_META = buildDefaultMatchMeta();
 
 function buildDefaultMatchMeta() {
@@ -358,45 +367,49 @@ function readSheetRows(workbook, XLSX, aliases) {
   return XLSX.utils.sheet_to_json(sheet, { defval: "" });
 }
 
-function getRowValue(row, keys) {
-  for (const key of keys) {
-    if (row[key] !== undefined && row[key] !== null && row[key] !== "") return row[key];
-  }
-  return "";
+function getCellValue(sheet, XLSX, row, col) {
+  const cell = sheet[XLSX.utils.encode_cell({ r: row, c: col })];
+  return cell ? cell.v : "";
 }
 
-function parseMatchSheet(rows) {
+function readMatchSheetByColumns(sheet, XLSX, startRow = 3) {
   const bets = {};
 
-  rows.forEach((row) => {
-    const id = getRowValue(row, ["ID", "Id", "id", "Partido", "PARTIDO", "Match ID"]);
-    if (!id) return;
+  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:L1");
 
-    const homeGoals = getRowValue(row, [
-      "Goles Local",
-      "GL",
-      "Marcador Local",
-      "Local Goles",
-      "Home Goals",
-      "Home",
-    ]);
+  for (let row = startRow; row <= range.e.r; row += 1) {
+  const id = String(getCellValue(sheet, XLSX, row, 0) || "").trim();
+  const homeGoals = getCellValue(sheet, XLSX, row, 3);
+  const awayGoals = getCellValue(sheet, XLSX, row, 4);
 
-    const awayGoals = getRowValue(row, [
-      "Goles Visitante",
-      "GV",
-      "Marcador Visitante",
-      "Visitante Goles",
-      "Away Goals",
-      "Away",
-    ]);
+  if (!id || id === "ID") continue;
 
-    const homeValue = homeGoals !== "" ? String(homeGoals).trim() : "";
-    const awayValue = awayGoals !== "" ? String(awayGoals).trim() : "";
+  const cleanId = id.toUpperCase();
+
+  if (
+    !cleanId.startsWith("R16-") &&
+    !cleanId.startsWith("QF-") &&
+    !cleanId.startsWith("SF-") &&
+    cleanId !== "FINAL" &&
+    cleanId !== "FINAL2" &&
+    cleanId !== "3RO-01" &&
+    !/^[A-L]\d{2}$/.test(cleanId)
+  ) {
+    continue;
+  }
+
+  if (bets[id]) continue;
+
+    const homeValue = homeGoals !== "" && homeGoals !== null && homeGoals !== undefined ? String(homeGoals) : "";
+    const awayValue = awayGoals !== "" && awayGoals !== null && awayGoals !== undefined ? String(awayGoals) : "";
 
     if (homeValue !== "" || awayValue !== "") {
-      bets[String(id).trim()] = { home: homeValue, away: awayValue };
+      bets[id] = {
+        home: homeValue,
+        away: awayValue,
+      };
     }
-  });
+  }
 
   return bets;
 }
@@ -404,35 +417,28 @@ function parseMatchSheet(rows) {
 function parseExcel(buffer, XLSX) {
   const workbook = XLSX.read(buffer, { type: "array" });
 
-  const groupsSheet = getSheetByAliases(workbook, ["1_GRUPOS", "GRUPOS", "1 grupos"]);
-  if (!groupsSheet) {
+  const gruposSheet = workbook.Sheets["1_GRUPOS"];
+  if (!gruposSheet) {
     throw new Error("No se encontró la hoja '1_GRUPOS'.");
   }
 
-  const name =
-    groupsSheet["C2"]?.v?.toString().trim() ||
-    groupsSheet["B2"]?.v?.toString().trim() ||
-    "";
-
+  const name = gruposSheet["C2"]?.v?.toString().trim() || "";
   if (!name) {
     throw new Error("El participante no ingresó su nombre en C2.");
   }
 
-  const groupsRows = readSheetRows(workbook, XLSX, ["1_GRUPOS", "GRUPOS", "1 grupos"]);
-  const r16Rows = readSheetRows(workbook, XLSX, ["2_16AVOS", "16AVOS", "2 16AVOS"]);
-  const qfRows = readSheetRows(workbook, XLSX, ["3_CUARTOS", "CUARTOS", "3 CUARTOS"]);
-  const sfRows = readSheetRows(workbook, XLSX, ["4_SEMIS", "SEMIS", "4 SEMIS"]);
-  const finalRows = readSheetRows(workbook, XLSX, ["5_FINAL", "FINAL", "5 FINAL"]);
-
   const bets = {
-    ...parseMatchSheet(groupsRows),
-    ...parseMatchSheet(r16Rows),
-    ...parseMatchSheet(qfRows),
-    ...parseMatchSheet(sfRows),
-    ...parseMatchSheet(finalRows),
+    ...readMatchSheetByColumns(workbook.Sheets["1_GRUPOS"], XLSX, 3),
+    ...readMatchSheetByColumns(workbook.Sheets["2_16AVOS"], XLSX, 3),
+    ...readMatchSheetByColumns(workbook.Sheets["3_CUARTOS"], XLSX, 3),
+    ...readMatchSheetByColumns(workbook.Sheets["4_SEMIS"], XLSX, 3),
+    ...readMatchSheetByColumns(workbook.Sheets["5_FINAL"], XLSX, 3),
   };
 
-  return { name, bets };
+  return {
+    name,
+    bets,
+  };
 }
 
 function useViewport() {
@@ -758,7 +764,7 @@ function SummaryTable({ totals, users, bets, onOpenUser }) {
                 <td style={{ padding: 16, color: "#34d399", fontWeight: 800 }}>{row.pts}</td>
                 <td style={{ padding: 16 }}>{row.exact}</td>
                 <td style={{ padding: 16 }}>{row.result}</td>
-                <td style={{ padding: 16, color: "#94a3b8" }}>{Object.keys(bets[row.user] || {}).length}/{GROUP_MATCHES.length}</td>
+                <td style={{ padding: 16, color: "#94a3b8" }}>{Object.keys(bets[row.user] || {}).length}/{TOTAL_MATCHES}</td>
               </tr>
             ))}
           </tbody>
@@ -1500,7 +1506,7 @@ export default function App() {
                     <StatChip label="Posición" value={`#${rank}`} accent="#facc15" />
                     <StatChip label="Exactos" value={row.exact} accent="#7dd3fc" />
                     <StatChip label="Resultado" value={row.result} accent="#c084fc" />
-                    <StatChip label="Cargados" value={`${Object.keys(userBets).length}/${GROUP_MATCHES.length}`} accent="#fda4af" />
+                    <StatChip label="Cargados" value={`${Object.keys(userBets).length}/${TOTAL_MATCHES}`} accent="#fda4af"/>
                   </>
                 );
               })()}
