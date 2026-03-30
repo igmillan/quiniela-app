@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 const SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-const STORAGE_KEY = "quiniela2026_pro_v2";
+const STORAGE_KEY = "quiniela2026_pro_full_v1";
 const ADMIN_PASSWORD = "mundial2026";
 
 const GROUPS = {
@@ -327,29 +327,113 @@ function getSecond(standings, group) {
   return standings[group]?.[1] || `2° ${group}`;
 }
 
+
+function cleanTeamName(name) {
+  if (!name) return "";
+  return String(name)
+    .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, "")
+    .trim();
+}
+
+function normalizeSheetNameMap(workbook) {
+  const byLower = {};
+  (workbook.SheetNames || []).forEach((name) => {
+    byLower[String(name).trim().toLowerCase()] = name;
+  });
+  return byLower;
+}
+
+function getSheetByAliases(workbook, aliases) {
+  const nameMap = normalizeSheetNameMap(workbook);
+  for (const alias of aliases) {
+    const found = nameMap[String(alias).trim().toLowerCase()];
+    if (found && workbook.Sheets[found]) return workbook.Sheets[found];
+  }
+  return null;
+}
+
+function readSheetRows(workbook, XLSX, aliases) {
+  const sheet = getSheetByAliases(workbook, aliases);
+  if (!sheet) return [];
+  return XLSX.utils.sheet_to_json(sheet, { defval: "" });
+}
+
+function getRowValue(row, keys) {
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== null && row[key] !== "") return row[key];
+  }
+  return "";
+}
+
+function parseMatchSheet(rows) {
+  const bets = {};
+
+  rows.forEach((row) => {
+    const id = getRowValue(row, ["ID", "Id", "id", "Partido", "PARTIDO", "Match ID"]);
+    if (!id) return;
+
+    const homeGoals = getRowValue(row, [
+      "Goles Local",
+      "GL",
+      "Marcador Local",
+      "Local Goles",
+      "Home Goals",
+      "Home",
+    ]);
+
+    const awayGoals = getRowValue(row, [
+      "Goles Visitante",
+      "GV",
+      "Marcador Visitante",
+      "Visitante Goles",
+      "Away Goals",
+      "Away",
+    ]);
+
+    const homeValue = homeGoals !== "" ? String(homeGoals).trim() : "";
+    const awayValue = awayGoals !== "" ? String(awayGoals).trim() : "";
+
+    if (homeValue !== "" || awayValue !== "") {
+      bets[String(id).trim()] = { home: homeValue, away: awayValue };
+    }
+  });
+
+  return bets;
+}
+
 function parseExcel(buffer, XLSX) {
   const workbook = XLSX.read(buffer, { type: "array" });
-  const sheet = workbook.Sheets["1_GRUPOS"];
-  if (!sheet) throw new Error("No se encontró la hoja '1_GRUPOS'.");
 
-  const name = sheet["C2"]?.v?.toString().trim() || "";
-  if (!name) throw new Error("El participante no ingresó su nombre en C2.");
-
-  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:G1");
-  const bets = {};
-  for (let row = 4; row <= range.e.r; row += 1) {
-    const id = sheet[XLSX.utils.encode_cell({ r: row, c: 0 })]?.v?.toString().trim();
-    const home = sheet[XLSX.utils.encode_cell({ r: row, c: 3 })]?.v;
-    const away = sheet[XLSX.utils.encode_cell({ r: row, c: 4 })]?.v;
-    if (!id) continue;
-    const homeValue = home !== undefined && home !== "" ? String(home) : "";
-    const awayValue = away !== undefined && away !== "" ? String(away) : "";
-    if (homeValue !== "" || awayValue !== "") bets[id] = { home: homeValue, away: awayValue };
+  const groupsSheet = getSheetByAliases(workbook, ["1_GRUPOS", "GRUPOS", "1 grupos"]);
+  if (!groupsSheet) {
+    throw new Error("No se encontró la hoja '1_GRUPOS'.");
   }
+
+  const name =
+    groupsSheet["C2"]?.v?.toString().trim() ||
+    groupsSheet["B2"]?.v?.toString().trim() ||
+    "";
+
+  if (!name) {
+    throw new Error("El participante no ingresó su nombre en C2.");
+  }
+
+  const groupsRows = readSheetRows(workbook, XLSX, ["1_GRUPOS", "GRUPOS", "1 grupos"]);
+  const r16Rows = readSheetRows(workbook, XLSX, ["2_16AVOS", "16AVOS", "2 16AVOS"]);
+  const qfRows = readSheetRows(workbook, XLSX, ["3_CUARTOS", "CUARTOS", "3 CUARTOS"]);
+  const sfRows = readSheetRows(workbook, XLSX, ["4_SEMIS", "SEMIS", "4 SEMIS"]);
+  const finalRows = readSheetRows(workbook, XLSX, ["5_FINAL", "FINAL", "5 FINAL"]);
+
+  const bets = {
+    ...parseMatchSheet(groupsRows),
+    ...parseMatchSheet(r16Rows),
+    ...parseMatchSheet(qfRows),
+    ...parseMatchSheet(sfRows),
+    ...parseMatchSheet(finalRows),
+  };
 
   return { name, bets };
 }
-
 
 function useViewport() {
   const [width, setWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1280);
@@ -1141,7 +1225,7 @@ function BracketView({ userBets, onSetBet }) {
           </div>
         </div>
 
-        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 8 }}>
+        <div style={{ overflowX: "auto" }}>
           <div style={{
             minWidth: isMobile ? 1440 : 1720,
             display: "grid",
@@ -1505,5 +1589,6 @@ export default function App() {
     </Shell>
   );
 }
+
 
 
