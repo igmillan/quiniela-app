@@ -1,7 +1,13 @@
+import { db } from "./firebase";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  onSnapshot
+} from "firebase/firestore";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 const SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-const STORAGE_KEY = "quiniela2026_pro_full_v1";
 const ADMIN_PASSWORD = "mundial2026";
 
 const GROUPS = {
@@ -119,6 +125,29 @@ const STAGE_LABELS = {
   Final: "Final",
 };
 
+async function loadStoreFromFirebase() {
+  console.log("Cargando desde Firebase...");
+
+  const ref = doc(db, "quiniela", "main");
+  const snap = await getDoc(ref);
+
+  if (snap.exists()) {
+    console.log("Datos encontrados en Firebase:", snap.data());
+    return snap.data();
+  }
+
+  console.log("No había datos en Firebase todavía.");
+  return {};
+}
+
+async function saveStoreToFirebase(store) {
+  console.log("Guardando en Firebase:", store);
+
+  const ref = doc(db, "quiniela", "main");
+  await setDoc(ref, store, { merge: true });
+
+  console.log("Guardado OK en Firebase");
+}
 function getFlag(team) {
   const clean = cleanTeamName(team);
   return FLAGS[clean] || "🏳️";
@@ -126,20 +155,6 @@ function getFlag(team) {
 
 function randomColor() {
   return PALETTE[Math.floor(Math.random() * PALETTE.length)];
-}
-
-function loadStore() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
-  } catch {
-    return {};
-  }
-}
-
-function saveStore(data) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {}
 }
 
 function genGroupMatches() {
@@ -1478,7 +1493,7 @@ function useViewport() {
 export default function App() {
   const { isMobile, isTablet } = useViewport();
   const [XLSX, setXLSX] = useState(null);
-  const [store, setStore] = useState(loadStore);
+  const [store, setStore] = useState({});
   const [view, setView] = useState("home");
   const [activeUser, setActiveUser] = useState(null);
   const [newName, setNewName] = useState("");
@@ -1488,6 +1503,37 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [groupFilter, setGroupFilter] = useState("ALL");
   const [bracketMode, setBracketMode] = useState(false);
+  const lastSavedRef = useRef("");
+
+  useEffect(() => {
+  console.log("Escuchando Firebase en tiempo real...");
+
+  const ref = doc(db, "quiniela", "main");
+
+  const unsubscribe = onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) {
+        console.log("No existe documento todavía en Firebase.");
+        return;
+      }
+
+      const incoming = snap.data();
+      const serializedIncoming = JSON.stringify(incoming);
+
+      console.log("Snapshot recibido:", incoming);
+
+      if (lastSavedRef.current === serializedIncoming) return;
+
+      setStore(incoming);
+    },
+    (error) => {
+      console.error("Error escuchando Firebase:", error);
+    }
+  );
+
+  return () => unsubscribe();
+}, []);
 
   useEffect(() => {
     if (window.XLSX) {
@@ -1501,8 +1547,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    saveStore(store);
-  }, [store]);
+  if (!store || Object.keys(store).length === 0) return;
+
+  const serialized = JSON.stringify(store);
+
+  if (lastSavedRef.current === serialized) return;
+
+  lastSavedRef.current = serialized;
+
+  saveStoreToFirebase(store).catch((error) => {
+    console.error("Error guardando en Firebase:", error);
+  });
+}, [store]);
+
+useEffect(() => {
+  console.log("STORE CAMBIÓ:", store);
+}, [store]);
 
   const users = store.users || {};
   const bets = store.bets || {};
