@@ -68,6 +68,42 @@ const FLAGS = {
   "Croacia": "🇭🇷",
   "Ghana": "🇬🇭",
   "Panamá": "🇵🇦",
+
+  "Bosnia": "🇧🇦",
+  "Italia": "🇮🇹",
+  "Rep. Checa": "🇨🇿",
+  "Dinamarca": "🇩🇰",
+  "Kosovo": "🇽🇰",
+  "Turquía": "🇹🇷",
+  "Suecia": "🇸🇪",
+  "Polonia": "🇵🇱",
+  "Jamaica": "🇯🇲",
+  "RD Congo": "🇨🇩",
+  "Bolivia": "🇧🇴",
+  "Irak": "🇮🇶",
+  "República Checa": "🇨🇿",
+  "República Dominicana": "🇩🇴",
+  "Congo": "🇨🇩",
+  "Costa Rica": "🇨🇷",
+  "Italia/Bosnia*": "🏳️",
+  "Dinamarca/Rep. Checa*": "🏳️",
+  "Turquía/Kosovo*": "🏳️",
+  "Polonia/Suecia*": "🏳️",
+  "RD Congo/Jamaica*": "🏳️",
+  "Irak/Bolivia*": "🏳️",
+  "Rep. Checa / Dinamarca": "🏳️",
+  "Bosnia / Italia": "🏳️",
+  "Suecia / Polonia": "🏳️",
+  "Kosovo / Turquía": "🏳️",
+  "Jamaica / RD Congo": "🏳️",
+  "Bolivia / Irak": "🏳️",
+  "Definir ganador": "🏳️",
+  "Perdedor SF-01": "🏳️",
+  "Perdedor SF-02": "🏳️",
+  "Ganador QF-01": "🏳️",
+  "Ganador QF-02": "🏳️",
+  "Ganador QF-03": "🏳️",
+  "Ganador QF-04": "🏳️",
 };
 
 const PALETTE = [
@@ -84,7 +120,8 @@ const STAGE_LABELS = {
 };
 
 function getFlag(team) {
-  return FLAGS[team] || "🏳️";
+  const clean = cleanTeamName(team);
+  return FLAGS[clean] || "🏳️";
 }
 
 function randomColor() {
@@ -161,7 +198,7 @@ const FINALS = [
   { id: "FINAL2", stage: "Final", sfA: "SF-03", sfB: "SF-04" },
 ];
 
-const FINAL_MATCHES = 3; // final + final2 + 3er lugar
+const FINAL_MATCHES = 3;
 
 const TOTAL_MATCHES =
   GROUP_MATCHES.length +
@@ -262,8 +299,18 @@ function buildDefaultMatchMeta() {
   return meta;
 }
 
-function enrichMatch(match) {
-  return { ...match, ...(MATCH_META[match.id] || {}) };
+function enrichMatch(match, importedMatches = {}) {
+  const merged = {
+    ...match,
+    ...(MATCH_META[match.id] || {}),
+    ...(importedMatches[match.id] || {}),
+  };
+
+  return {
+    ...merged,
+    home: cleanTeamName(merged.home),
+    away: cleanTeamName(merged.away),
+  };
 }
 
 function groupMatchesBySection(matches) {
@@ -337,71 +384,110 @@ function getSecond(standings, group) {
 }
 
 
+
 function cleanTeamName(name) {
   if (!name) return "";
+
   return String(name)
+    .normalize("NFKC")
     .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, "")
+    .replace(/🏳️/gu, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[^\p{L}\p{N}\s\-\/.*()]/gu, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
-function normalizeSheetNameMap(workbook) {
-  const byLower = {};
-  (workbook.SheetNames || []).forEach((name) => {
-    byLower[String(name).trim().toLowerCase()] = name;
-  });
-  return byLower;
-}
-
-function getSheetByAliases(workbook, aliases) {
-  const nameMap = normalizeSheetNameMap(workbook);
-  for (const alias of aliases) {
-    const found = nameMap[String(alias).trim().toLowerCase()];
-    if (found && workbook.Sheets[found]) return workbook.Sheets[found];
+function normalizeDateValue(value) {
+  if (!value) return "";
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
   }
-  return null;
-}
-
-function readSheetRows(workbook, XLSX, aliases) {
-  const sheet = getSheetByAliases(workbook, aliases);
-  if (!sheet) return [];
-  return XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  return String(value).trim();
 }
 
 function getCellValue(sheet, XLSX, row, col) {
-  const cell = sheet[XLSX.utils.encode_cell({ r: row, c: col })];
+  const cell = sheet?.[XLSX.utils.encode_cell({ r: row, c: col })];
   return cell ? cell.v : "";
 }
 
-function readMatchSheetByColumns(sheet, XLSX, startRow = 3) {
-  const bets = {};
+function isValidMatchId(id) {
+  const cleanId = String(id || "").trim().toUpperCase();
+  return (
+    /^[A-L]\d{2}$/.test(cleanId) ||
+    cleanId.startsWith("R16-") ||
+    cleanId.startsWith("QF-") ||
+    cleanId.startsWith("SF-") ||
+    cleanId === "FINAL" ||
+    cleanId === "FINAL2" ||
+    cleanId === "3RO-01"
+  );
+}
 
+function readPhaseSheet(sheet, XLSX, options = {}) {
+  if (!sheet) return { bets: {}, matches: {} };
+
+  const {
+    startRow = 3,
+    idCol = 0,
+    groupCol = 1,
+    homeCol = 2,
+    homeGoalsCol = 3,
+    awayGoalsCol = 4,
+    awayCol = 5,
+    phaseCol = 6,
+    dateCol = 7,
+    timeCol = 8,
+    stadiumCol = 9,
+    cityCol = 10,
+    defaultStage = "",
+  } = options;
+
+  const bets = {};
+  const matches = {};
   const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:L1");
 
   for (let row = startRow; row <= range.e.r; row += 1) {
-  const id = String(getCellValue(sheet, XLSX, row, 0) || "").trim();
-  const homeGoals = getCellValue(sheet, XLSX, row, 3);
-  const awayGoals = getCellValue(sheet, XLSX, row, 4);
+    const rawId = getCellValue(sheet, XLSX, row, idCol);
+    const id = String(rawId || "").trim();
 
-  if (!id || id === "ID") continue;
+    if (!isValidMatchId(id)) continue;
 
-  const cleanId = id.toUpperCase();
+    const group = String(getCellValue(sheet, XLSX, row, groupCol) || "").trim();
+    const home = cleanTeamName(getCellValue(sheet, XLSX, row, homeCol));
+    const away = cleanTeamName(getCellValue(sheet, XLSX, row, awayCol));
+    const stage = String(getCellValue(sheet, XLSX, row, phaseCol) || defaultStage).trim();
+    const date = normalizeDateValue(getCellValue(sheet, XLSX, row, dateCol));
+    const time = String(getCellValue(sheet, XLSX, row, timeCol) || "").trim();
+    const stadium = String(getCellValue(sheet, XLSX, row, stadiumCol) || "").trim();
+    const city = String(getCellValue(sheet, XLSX, row, cityCol) || "").trim();
 
-  if (
-    !cleanId.startsWith("R16-") &&
-    !cleanId.startsWith("QF-") &&
-    !cleanId.startsWith("SF-") &&
-    cleanId !== "FINAL" &&
-    cleanId !== "FINAL2" &&
-    cleanId !== "3RO-01" &&
-    !/^[A-L]\d{2}$/.test(cleanId)
-  ) {
-    continue;
-  }
+    const homeGoals = getCellValue(sheet, XLSX, row, homeGoalsCol);
+    const awayGoals = getCellValue(sheet, XLSX, row, awayGoalsCol);
 
-  if (bets[id]) continue;
+    matches[id] = {
+      id,
+      group,
+      home,
+      away,
+      stage,
+      date,
+      time,
+      stadium,
+      city,
+      sectionLabel: date || stage || "Por definir",
+      dayLabel: date || stage || "Por definir",
+    };
 
-    const homeValue = homeGoals !== "" && homeGoals !== null && homeGoals !== undefined ? String(homeGoals) : "";
-    const awayValue = awayGoals !== "" && awayGoals !== null && awayGoals !== undefined ? String(awayGoals) : "";
+    const homeValue =
+      homeGoals !== "" && homeGoals !== null && homeGoals !== undefined
+        ? String(homeGoals).trim()
+        : "";
+
+    const awayValue =
+      awayGoals !== "" && awayGoals !== null && awayGoals !== undefined
+        ? String(awayGoals).trim()
+        : "";
 
     if (homeValue !== "" || awayValue !== "") {
       bets[id] = {
@@ -411,49 +497,116 @@ function readMatchSheetByColumns(sheet, XLSX, startRow = 3) {
     }
   }
 
-  return bets;
+  return { bets, matches };
 }
 
 function parseExcel(buffer, XLSX) {
-  const workbook = XLSX.read(buffer, { type: "array" });
+  const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
 
-  const gruposSheet = workbook.Sheets["1_GRUPOS"];
-  if (!gruposSheet) {
+  const groupsSheet = workbook.Sheets["1_GRUPOS"];
+  if (!groupsSheet) {
     throw new Error("No se encontró la hoja '1_GRUPOS'.");
   }
 
-  const name = gruposSheet["C2"]?.v?.toString().trim() || "";
+  const name =
+    groupsSheet["C2"]?.v?.toString().trim() ||
+    groupsSheet["B2"]?.v?.toString().trim() ||
+    "";
   if (!name) {
     throw new Error("El participante no ingresó su nombre en C2.");
   }
 
-  const bets = {
-    ...readMatchSheetByColumns(workbook.Sheets["1_GRUPOS"], XLSX, 3),
-    ...readMatchSheetByColumns(workbook.Sheets["2_16AVOS"], XLSX, 3),
-    ...readMatchSheetByColumns(workbook.Sheets["3_CUARTOS"], XLSX, 3),
-    ...readMatchSheetByColumns(workbook.Sheets["4_SEMIS"], XLSX, 3),
-    ...readMatchSheetByColumns(workbook.Sheets["5_FINAL"], XLSX, 3),
-  };
+  const groups = readPhaseSheet(workbook.Sheets["1_GRUPOS"], XLSX, {
+    startRow: 5,
+    groupCol: 1,
+    homeCol: 2,
+    homeGoalsCol: 3,
+    awayGoalsCol: 4,
+    awayCol: 5,
+    phaseCol: 6,
+    dateCol: 7,
+    timeCol: 8,
+    stadiumCol: 9,
+    cityCol: 10,
+    defaultStage: "Grupos",
+  });
+
+  const r16 = readPhaseSheet(workbook.Sheets["2_16AVOS"], XLSX, {
+    startRow: 3,
+    groupCol: 1,
+    homeCol: 2,
+    homeGoalsCol: 3,
+    awayGoalsCol: 4,
+    awayCol: 5,
+    phaseCol: 11,
+    dateCol: 6,
+    timeCol: 7,
+    stadiumCol: 8,
+    cityCol: 9,
+    defaultStage: "16avos",
+  });
+
+  const qf = readPhaseSheet(workbook.Sheets["3_CUARTOS"], XLSX, {
+    startRow: 3,
+    groupCol: 1,
+    homeCol: 2,
+    homeGoalsCol: 3,
+    awayGoalsCol: 4,
+    awayCol: 5,
+    phaseCol: 11,
+    dateCol: 6,
+    timeCol: 7,
+    stadiumCol: 8,
+    cityCol: 9,
+    defaultStage: "Cuartos",
+  });
+
+  const sf = readPhaseSheet(workbook.Sheets["4_SEMIS"], XLSX, {
+    startRow: 3,
+    groupCol: 1,
+    homeCol: 2,
+    homeGoalsCol: 3,
+    awayGoalsCol: 4,
+    awayCol: 5,
+    phaseCol: 11,
+    dateCol: 6,
+    timeCol: 7,
+    stadiumCol: 8,
+    cityCol: 9,
+    defaultStage: "Semis",
+  });
+
+  const finals = readPhaseSheet(workbook.Sheets["5_FINAL"], XLSX, {
+    startRow: 3,
+    groupCol: 1,
+    homeCol: 2,
+    homeGoalsCol: 3,
+    awayGoalsCol: 4,
+    awayCol: 5,
+    phaseCol: 11,
+    dateCol: 6,
+    timeCol: 7,
+    stadiumCol: 8,
+    cityCol: 9,
+    defaultStage: "Final",
+  });
 
   return {
     name,
-    bets,
-  };
-}
-
-function useViewport() {
-  const [width, setWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1280);
-
-  useEffect(() => {
-    const onResize = () => setWidth(window.innerWidth);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  return {
-    width,
-    isMobile: width < 768,
-    isTablet: width >= 768 && width < 1100,
+    bets: {
+      ...groups.bets,
+      ...r16.bets,
+      ...qf.bets,
+      ...sf.bets,
+      ...finals.bets,
+    },
+    importedMatches: {
+      ...groups.matches,
+      ...r16.matches,
+      ...qf.matches,
+      ...sf.matches,
+      ...finals.matches,
+    },
   };
 }
 
@@ -730,7 +883,7 @@ function ImportModal({ XLSX, onClose, onImport }) {
         )}
 
         <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-          {preview ? <PrimaryButton onClick={() => { onImport(preview.name, preview.bets); onClose(); }} style={{ flex: 1 }}>Importar</PrimaryButton> : null}
+          {preview ? <PrimaryButton onClick={() => { onImport(preview.name, preview.bets, preview.importedMatches); onClose(); }} style={{ flex: 1 }}>Importar</PrimaryButton> : null}
           <GhostButton onClick={onClose}>Cerrar</GhostButton>
         </div>
       </Card>
@@ -1120,7 +1273,7 @@ function BracketCenter({ finalItem, thirdItem, onSetBet }) {
   );
 }
 
-function BracketView({ userBets, onSetBet }) {
+function BracketView({ userBets, importedMatches = {}, onSetBet }) {
   const { isMobile } = useViewport();
   const standings = computeStandings(userBets);
 
@@ -1175,17 +1328,26 @@ function BracketView({ userBets, onSetBet }) {
   };
 
   const r16Items = R16.map((match) => {
-    const [t1, t2] = r16Teams(match.id);
+    const [fallbackT1, fallbackT2] = r16Teams(match.id);
+    const imported = importedMatches[match.id] || {};
+    const t1 = imported.home || fallbackT1;
+    const t2 = imported.away || fallbackT2;
     return { id: match.id, t1, t2, bet: userBets[match.id] || {}, winner: winnerFromBet(t1, t2, userBets[match.id]) };
   });
 
   const qfItems = QF.map((match) => {
-    const [t1, t2] = qfTeams(match.id);
+    const [fallbackT1, fallbackT2] = qfTeams(match.id);
+    const imported = importedMatches[match.id] || {};
+    const t1 = imported.home || fallbackT1;
+    const t2 = imported.away || fallbackT2;
     return { id: match.id, t1, t2, bet: userBets[match.id] || {}, winner: winnerFromBet(t1, t2, userBets[match.id]) };
   });
 
   const sfItems = SF.map((match) => {
-    const [t1, t2] = sfTeams(match.id);
+    const [fallbackT1, fallbackT2] = sfTeams(match.id);
+    const imported = importedMatches[match.id] || {};
+    const t1 = imported.home || fallbackT1;
+    const t2 = imported.away || fallbackT2;
     return { id: match.id, t1, t2, bet: userBets[match.id] || {}, winner: winnerFromBet(t1, t2, userBets[match.id]) };
   });
 
@@ -1199,20 +1361,28 @@ function BracketView({ userBets, onSetBet }) {
   const leftSfId = leftSF[0]?.id || "SF-01";
   const rightSfId = rightSF[0]?.id || "SF-03";
 
+  const importedFinal = importedMatches["FINAL"] || {};
+  const importedThird = importedMatches["3RO-01"] || importedMatches["FINAL2"] || {};
+
+  const finalTeam1 = importedFinal.home || sfWinner(leftSfId);
+  const finalTeam2 = importedFinal.away || sfWinner(rightSfId);
+  const thirdTeam1 = importedThird.home || sfLoser(leftSfId);
+  const thirdTeam2 = importedThird.away || sfLoser(rightSfId);
+
   const finalItem = {
     id: "FINAL",
-    t1: sfWinner(leftSfId),
-    t2: sfWinner(rightSfId),
+    t1: finalTeam1,
+    t2: finalTeam2,
     bet: userBets["FINAL"] || {},
-    winner: winnerFromBet(sfWinner(leftSfId), sfWinner(rightSfId), userBets["FINAL"]),
+    winner: winnerFromBet(finalTeam1, finalTeam2, userBets["FINAL"]),
   };
 
   const thirdItem = {
-    id: "FINAL2",
-    t1: sfLoser(leftSfId),
-    t2: sfLoser(rightSfId),
-    bet: userBets["FINAL2"] || {},
-    winner: winnerFromBet(sfLoser(leftSfId), sfLoser(rightSfId), userBets["FINAL2"]),
+    id: importedMatches["3RO-01"] ? "3RO-01" : "FINAL2",
+    t1: thirdTeam1,
+    t2: thirdTeam2,
+    bet: userBets[importedMatches["3RO-01"] ? "3RO-01" : "FINAL2"] || {},
+    winner: winnerFromBet(thirdTeam1, thirdTeam2, userBets[importedMatches["3RO-01"] ? "3RO-01" : "FINAL2"]),
   };
 
   return (
@@ -1288,7 +1458,23 @@ function BracketView({ userBets, onSetBet }) {
     </div>
   );
 }
+function useViewport() {
+  const [width, setWidth] = React.useState(
+    typeof window !== "undefined" ? window.innerWidth : 1280
+  );
 
+  React.useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  return {
+    width,
+    isMobile: width < 768,
+    isTablet: width >= 768 && width < 1100,
+  };
+}
 export default function App() {
   const { isMobile, isTablet } = useViewport();
   const [XLSX, setXLSX] = useState(null);
@@ -1390,18 +1576,27 @@ export default function App() {
     setNewName("");
   };
 
-  const handleImport = (name, importedBets) => {
+  const handleImport = (name, importedBets, importedMatches = {}) => {
+    const assignedColor = users[name]?.color || randomColor();
+
     setStore((current) => ({
       ...current,
       users: {
         ...(current.users || {}),
-        [name]: current.users?.[name] || { name, color: randomColor() },
+        [name]: current.users?.[name] || { name, color: assignedColor },
       },
       bets: {
         ...(current.bets || {}),
         [name]: {
           ...(current.bets?.[name] || {}),
           ...importedBets,
+        },
+      },
+      importedMatches: {
+        ...(current.importedMatches || {}),
+        [name]: {
+          ...(current.importedMatches?.[name] || {}),
+          ...importedMatches,
         },
       },
     }));
@@ -1424,9 +1619,10 @@ export default function App() {
   };
 
   const userBets = activeUser ? bets[activeUser] || {} : {};
+  const userImportedMatches = activeUser ? store.importedMatches?.[activeUser] || {} : {};
   const filteredGroupMatches = GROUP_MATCHES
     .filter((match) => groupFilter === "ALL" || match.group === groupFilter)
-    .map(enrichMatch);
+    .map((match) => enrichMatch(match, userImportedMatches));
   const groupedSchedule = groupMatchesBySection(filteredGroupMatches);
 
   return (
@@ -1506,7 +1702,7 @@ export default function App() {
                     <StatChip label="Posición" value={`#${rank}`} accent="#facc15" />
                     <StatChip label="Exactos" value={row.exact} accent="#7dd3fc" />
                     <StatChip label="Resultado" value={row.result} accent="#c084fc" />
-                    <StatChip label="Cargados" value={`${Object.keys(userBets).length}/${TOTAL_MATCHES}`} accent="#fda4af"/>
+                    <StatChip label="Cargados" value={`${Object.keys(userBets).length}/${TOTAL_MATCHES}`} accent="#fda4af" />
                   </>
                 );
               })()}
@@ -1526,7 +1722,7 @@ export default function App() {
                 ))}
               </>
             ) : (
-              <BracketView userBets={userBets} onSetBet={(id, side, value) => setBet(activeUser, id, side, value)} />
+              <BracketView userBets={userBets} importedMatches={userImportedMatches} onSetBet={(id, side, value) => setBet(activeUser, id, side, value)} />
             )}
           </Container>
         </>
@@ -1595,6 +1791,3 @@ export default function App() {
     </Shell>
   );
 }
-
-
-
