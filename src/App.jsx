@@ -6,6 +6,8 @@ import {
   onSnapshot
 } from "firebase/firestore";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import {saveJourneySummary,subscribeLatestJourneySummary,} from "./firebaseStore";
+
 
 const SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
 const ADMIN_PASSWORD = "mundial2026";
@@ -124,6 +126,9 @@ const STAGE_LABELS = {
   Semis: "Semifinales",
   Final: "Final",
 };
+
+  const ENTRY_FEE = 500; // MXN
+  const HOUSE_FEE_PERCENT = 0.1; // 10%
 
 async function loadStoreFromFirebase() {
   console.log("Cargando desde Firebase...");
@@ -807,34 +812,332 @@ function BackButton({ onClick }) {
   );
 }
 
-function HeaderHero({ usersCount, totalPot, currency, onImport, onOpenAdmin, onOpenTable, onOpenPot }) {
+function HeaderHero({
+  usersCount,
+  totalPot,
+  currency,
+  onImport,
+  onOpenAdmin,
+  onOpenTable,
+  onOpenPot,
+  isAdminView = false,
+}) {
   const { isMobile, isTablet } = useViewport();
+
   return (
-    <div style={{ padding: isMobile ? "18px 0 18px" : "34px 0 26px" }}>
+    <div style={{ padding: isMobile ? "18px 0 12px" : "30px 0 18px" }}>
       <Container>
-        <Card style={{ padding: isMobile ? 18 : 28, overflow: "hidden", position: "relative" }}>
-          <div style={{ position: "absolute", inset: 0, background: "radial-gradient(circle at 20% 20%, rgba(34,197,94,0.18), transparent 35%), radial-gradient(circle at 85% 15%, rgba(56,189,248,0.15), transparent 30%), radial-gradient(circle at 60% 100%, rgba(250,204,21,0.1), transparent 28%)" }} />
-          <div style={{ position: "relative", display: "grid", gridTemplateColumns: isMobile ? "1fr" : (isTablet ? "1fr" : "1.4fr 1fr"), gap: 20 }}>
-            <div>
-              <div style={{ display: "inline-flex", padding: "8px 12px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "#93c5fd", fontWeight: 700, fontSize: 12 }}>Mundial 2026 · Quiniela pro</div>
-              <h1 style={{ margin: "16px 0 10px", fontFamily: "Barlow Condensed, sans-serif", fontSize: isMobile ? "44px" : "clamp(52px, 8vw, 84px)", lineHeight: 0.9, letterSpacing: -1, textTransform: "uppercase" }}>
-                Quiniela <span style={{ color: "#34d399" }}>2026</span>
-              </h1>
-              <p style={{ margin: 0, maxWidth: 640, color: "#b8c4d9", lineHeight: 1.7 }}>
-                Mantienes el mismo flujo del Excel, pero ahora la app muestra los partidos con una presentación más cuidada, una vista tipo calendario y tarjetas mucho más premium.
+        <Card
+          style={{
+            padding: isMobile ? 20 : 30,
+            overflow: "hidden",
+            position: "relative",
+            border: "1px solid rgba(255,255,255,0.08)",
+            background:
+              "linear-gradient(135deg, rgba(2,6,23,0.96), rgba(5,20,46,0.96))",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: `
+                radial-gradient(circle at 12% 18%, rgba(34,197,94,0.18), transparent 28%),
+                radial-gradient(circle at 88% 16%, rgba(56,189,248,0.14), transparent 24%),
+                radial-gradient(circle at 72% 82%, rgba(250,204,21,0.12), transparent 22%),
+                linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0))
+              `,
+            }}
+          />
+
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              pointerEvents: "none",
+              opacity: 0.18,
+              backgroundImage: `
+                linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)
+              `,
+              backgroundSize: "32px 32px",
+              maskImage:
+                "linear-gradient(to bottom, rgba(0,0,0,0.8), rgba(0,0,0,0.25))",
+            }}
+          />
+
+          <div
+            style={{
+              position: "relative",
+              display: "grid",
+              gridTemplateColumns: isMobile
+                ? "1fr"
+                : isTablet
+                  ? "1fr"
+                  : "1.25fr 0.95fr",
+              gap: isMobile ? 20 : 28,
+              alignItems: "stretch",
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignSelf: "flex-start",
+                  padding: "8px 14px",
+                  borderRadius: 999,
+                  border: "1px solid rgba(147,197,253,0.18)",
+                  background: "rgba(255,255,255,0.04)",
+                  color: "#93c5fd",
+                  fontWeight: 800,
+                  fontSize: 12,
+                  letterSpacing: 0.4,
+                  marginBottom: 14,
+                  textTransform: "uppercase",
+                }}
+              >
+                Mundial 2026 · Quiniela del torneo
+              </div>
+
+              <div
+                style={{
+                  fontFamily: "Barlow Condensed, sans-serif",
+                  fontSize: isMobile ? 52 : 78,
+                  lineHeight: 0.95,
+                  fontWeight: 800,
+                  letterSpacing: -1,
+                  color: "#f8fafc",
+                  textTransform: "uppercase",
+                  marginBottom: 12,
+                }}
+              >
+                Pronostica.
+                <br />
+                <span style={{ color: "#34d399" }}>Compite. Gana.</span>
+              </div>
+
+              <p
+                style={{
+                  margin: 0,
+                  maxWidth: 720,
+                  color: "#cbd5e1",
+                  lineHeight: 1.7,
+                  fontSize: isMobile ? 18 : 20,
+                }}
+              >
+                Sigue el Mundial jornada a jornada, registra tus marcadores y compite por liderar la
+                quiniela con clasificación, bote y resumen en tiempo real.
               </p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 18, flexDirection: isMobile ? "column" : "row" }}>
-                <PrimaryButton onClick={onImport}>Importar Excel</PrimaryButton>
-                <GhostButton onClick={onOpenTable}>Tabla general</GhostButton>
-                <GhostButton onClick={onOpenPot}>Bote</GhostButton>
-                <GhostButton onClick={onOpenAdmin}>Admin</GhostButton>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 12,
+                  marginTop: 22,
+                  alignItems: "center",
+                }}
+              >
+                <PrimaryButton onClick={onOpenTable}>
+                  Ver clasificación
+                </PrimaryButton>
+
+                <GhostButton onClick={onOpenAdmin}>
+                  Admin
+                </GhostButton>
+
+                {isAdminView ? (
+                  <GhostButton onClick={onImport}>
+                    Cargar quiniela
+                  </GhostButton>
+                ) : null}
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 10,
+                  marginTop: 24,
+                }}
+              >
+                {[
+                  "Fase de grupos y bracket",
+                  "Ranking en vivo",
+                  "Resumen de jornada",
+                ].map((item) => (
+                  <div
+                    key={item}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 999,
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid rgba(255,255,255,0.06)",
+                      color: "#94a3b8",
+                      fontSize: 13,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {item}
+                  </div>
+                ))}
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(2, minmax(0, 1fr))", gap: 12, alignContent: "start" }}>
-              <StatChip label="Participantes" value={usersCount} accent="#7dd3fc" />
-              <StatChip label="Bote" value={`${Number(totalPot).toLocaleString()} ${currency}`} accent="#facc15" />
-              <StatChip label="Formato" value="Excel → App" accent="#34d399" />
-              <StatChip label="Vista" value="Calendario" accent="#c084fc" />
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateRows: "auto 1fr",
+                gap: 14,
+              }}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 12,
+                }}
+              >
+                <StatChip
+                  label="Participantes"
+                  value={usersCount}
+                  accent="#7dd3fc"
+                />
+                <StatChip
+                  label="Bote actual"
+                  value={`${Number(totalPot).toLocaleString()} ${currency}`}
+                  accent="#facc15"
+                />
+                <StatChip
+                  label="Formato"
+                  value="Excel → App"
+                  accent="#34d399"
+                />
+                <StatChip
+                  label="Vista"
+                  value="Calendario"
+                  accent="#c084fc"
+                />
+              </div>
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                  color: "#94a3b8",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  fontWeight: 900,
+                }}
+              >
+                El <strong>bote total</strong> se calcula automáticamente con base en el número de participantes.
+                Se aplicará una <strong>comisión del 10%</strong> por concepto de administración y operación de la plataforma.
+              </div>
+              <div
+                style={{
+                  borderRadius: 22,
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  background:
+                    "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",
+                  padding: 18,
+                  display: "grid",
+                  gap: 14,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    alignItems: "center",
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        color: "#f8fafc",
+                        fontWeight: 800,
+                        fontSize: 18,
+                      }}
+                    >
+                      Centro del torneo
+                    </div>
+                    <div
+                      style={{
+                        color: "#94a3b8",
+                        fontSize: 14,
+                        marginTop: 4,
+                      }}
+                    >
+                      Controla la quiniela, sigue la tabla y vive cada jornada.
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: 999,
+                      background: "rgba(34,197,94,0.12)",
+                      color: "#86efac",
+                      fontWeight: 800,
+                      fontSize: 12,
+                      border: "1px solid rgba(34,197,94,0.25)",
+                    }}
+                  >
+                    EN JUEGO
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                    gap: 10,
+                  }}
+                >
+                  {[
+                    ["Modalidad", "Pronósticos por partido"],
+                    ["Actualización", "Resultados + resumen"],
+                    ["Competencia", "Clasificación en vivo"],
+                    ["Objetivo", "Ser líder del torneo"],
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{
+                        padding: 12,
+                        borderRadius: 16,
+                        border: "1px solid rgba(255,255,255,0.06)",
+                        background: "rgba(255,255,255,0.03)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          color: "#94a3b8",
+                          fontSize: 12,
+                          fontWeight: 700,
+                          marginBottom: 4,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.3,
+                        }}
+                      >
+                        {label}
+                      </div>
+                      <div
+                        style={{
+                          color: "#f8fafc",
+                          fontWeight: 800,
+                          fontSize: 14,
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {value}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </Card>
@@ -1024,6 +1327,50 @@ const scoreInputStyle = {
   outline: "none",
 };
 
+function getMatchesByDate(matchesMap, results, targetDate) {
+  return Object.values(matchesMap || {}).filter((match) => {
+    if (!match?.date) return false;
+    if (match.date !== targetDate) return false;
+
+    const result = results?.[match.id];
+    if (!result) return false;
+    if (result.home === "" || result.away === "") return false;
+
+    return true;
+  });
+}
+
+function calcJourneyScores(users, bets, results, matchesOfDay) {
+  return Object.keys(users || {})
+    .map((user) => {
+      let points = 0;
+      let exact = 0;
+      let resultHits = 0;
+
+      matchesOfDay.forEach((match) => {
+        const bet = bets?.[user]?.[match.id];
+        const result = results?.[match.id];
+        const score = calcScore(bet, result);
+
+        points += score;
+        if (score === 3) exact += 1;
+        if (score === 1) resultHits += 1;
+      });
+
+      return {
+        user,
+        points,
+        exact,
+        resultHits,
+      };
+    })
+    .sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      return b.exact - a.exact;
+    });
+}
+
+
 function ScoreEditor({ homeValue, awayValue, onChange }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1087,9 +1434,12 @@ function ScheduleSection({ title, matches, bets, results, isAdmin, onChange }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 12 }}>
         <div>
           <div style={{ fontSize: 24, fontWeight: 800 }}>{title}</div>
-          <div style={{ color: "#8ea0bb", fontSize: 14 }}>{matches.length} partido{matches.length !== 1 ? "s" : ""}</div>
+          <div style={{ color: "#8ea0bb", fontSize: 14 }}>
+            {matches.length} partido{matches.length !== 1 ? "s" : ""}
+          </div>
         </div>
       </div>
+
       <div style={{ display: "grid", gap: 14 }}>
         {matches.map((match) => (
           <MatchCard
@@ -1106,7 +1456,105 @@ function ScheduleSection({ title, matches, bets, results, isAdmin, onChange }) {
   );
 }
 
+function JourneySummaryCard({ summary }) {
+  if (!summary) return null;
 
+  const topPlayers = summary.participantScores?.slice(0, 5) || [];
+  const matches = summary.matches || [];
+
+  return (
+    <Card style={{ padding: 20, marginTop: 20 }}>
+      <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>
+        Última jornada cerrada
+      </div>
+
+      <div style={{ color: "#8ea0bb", marginBottom: 18 }}>
+        Fecha: <strong style={{ color: "#e2e8f0" }}>{summary.date}</strong>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1.2fr 1fr",
+          gap: 18,
+        }}
+      >
+        <div>
+          <div style={{ fontWeight: 800, marginBottom: 10 }}>
+            Resultados del día
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {matches.map((match) => (
+              <div
+                key={match.id}
+                style={{
+                  padding: 12,
+                  borderRadius: 14,
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  background: "rgba(255,255,255,0.03)",
+                }}
+              >
+                <div style={{ fontSize: 12, color: "#8ea0bb", marginBottom: 4 }}>
+                  {match.stage || "Partido"} {match.group ? `· Grupo ${match.group}` : ""}
+                </div>
+
+                <div style={{ fontWeight: 700 }}>
+                  {match.home} {match.result?.home} - {match.result?.away} {match.away}
+                </div>
+
+                <div style={{ fontSize: 12, color: "#8ea0bb", marginTop: 4 }}>
+                  {match.stadium || "Estadio por definir"} · {match.city || ""}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontWeight: 800, marginBottom: 10 }}>
+            Top de la jornada
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {topPlayers.map((player, index) => {
+  const isWinner = index === 0;
+
+  return (
+    <div
+      key={player.user}
+      style={{
+        padding: 12,
+        borderRadius: 14,
+        background: isWinner
+          ? "linear-gradient(135deg, rgba(34,197,94,0.25), rgba(56,189,248,0.25))"
+          : "rgba(255,255,255,0.03)",
+        border: isWinner
+          ? "1px solid rgba(34,197,94,0.4)"
+          : "1px solid rgba(255,255,255,0.08)",
+        boxShadow: isWinner
+          ? "0 8px 30px rgba(34,197,94,0.25)"
+          : "none",
+        transition: "all 0.25s ease",
+      }}
+    >
+      <div style={{ fontWeight: 800 }}>
+        {isWinner ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `#${index + 1}`}{" "}
+        {player.user}
+      </div>
+
+      <div style={{ marginTop: 4, color: "#8ea0bb", fontSize: 14 }}>
+        {player.points} pts · {player.exact} exactos · {player.resultHits} aciertos
+      </div>
+    </div>
+  );
+})}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 function BracketMatch({ title, matchId, team1, team2, bet, onSetBet, winner, compact = false, highlight = false }) {
   return (
@@ -1504,6 +1952,9 @@ export default function App() {
   const [groupFilter, setGroupFilter] = useState("ALL");
   const [bracketMode, setBracketMode] = useState(false);
   const lastSavedRef = useRef("");
+  const [journeyDate, setJourneyDate] = useState("");
+  const [latestJourney, setLatestJourney] = useState(null);
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
 
   useEffect(() => {
   console.log("Escuchando Firebase en tiempo real...");
@@ -1561,13 +2012,33 @@ export default function App() {
 }, [store]);
 
 useEffect(() => {
+  const unsubscribe = subscribeLatestJourneySummary((summary) => {
+    setLatestJourney(summary);
+  });
+
+  return () => unsubscribe();
+}, []);
+
+useEffect(() => {
   console.log("STORE CAMBIÓ:", store);
 }, [store]);
 
   const users = store.users || {};
   const bets = store.bets || {};
   const results = store.results || {};
-  const pot = store.pot || { amount: 100, currency: "MXN" };
+  const importedMatches = store.importedMatches || {};
+  const totalPlayers = Object.keys(users).length;
+  const totalPot = totalPlayers * ENTRY_FEE;
+  const houseFee = totalPot * HOUSE_FEE_PERCENT;
+  const prizePool = totalPot - houseFee;
+  
+  const firstImportedUser = Object.keys(importedMatches)[0] || null;
+
+const importedMatchesByActiveUser = activeUser
+  ? importedMatches[activeUser] || {}
+  : firstImportedUser
+    ? importedMatches[firstImportedUser] || {}
+    : {};
 
   const totals = useMemo(() => {
     return Object.keys(users)
@@ -1589,8 +2060,6 @@ useEffect(() => {
       })
       .sort((a, b) => b.pts - a.pts);
   }, [users, bets, results]);
-
-  const totalPot = Object.keys(users).length * Number(pot.amount || 0);
 
   const setBet = (user, id, side, value) => {
     setStore((current) => ({
@@ -1672,17 +2141,97 @@ useEffect(() => {
     if (adminPassword === ADMIN_PASSWORD) {
       setAdminError("");
       setAdminPassword("");
+      setIsAdminUnlocked(true);
       setView("admin");
-      return;
+            return;
     }
     setAdminError("Contraseña incorrecta.");
   };
 
+  const logoutAdmin = () => {
+  setIsAdminUnlocked(false);
+  setView("home");
+  };
+
+function removeUser(userName) {
+  const confirmed = window.confirm(`¿Eliminar a ${userName} de la quiniela?`);
+  if (!confirmed) return;
+
+  setStore((current) => {
+    const nextUsers = { ...(current.users || {}) };
+    const nextBets = { ...(current.bets || {}) };
+    const nextImportedMatches = { ...(current.importedMatches || {}) };
+
+    delete nextUsers[userName];
+    delete nextBets[userName];
+    delete nextImportedMatches[userName];
+
+    return {
+      ...current,
+      users: nextUsers,
+      bets: nextBets,
+      importedMatches: nextImportedMatches,
+    };
+  });
+
+  if (activeUser === userName) {
+    setActiveUser(null);
+    setView("home");
+  }
+
+  setToast(`${userName} fue eliminado de la quiniela.`);
+}
+
+async function closeJourney(journeyDate) {
+  try {
+    const matchesOfDay = getMatchesByDate(
+      importedMatchesByActiveUser,
+      results,
+      journeyDate
+    );
+
+    if (!matchesOfDay.length) {
+      setToast(`No hay partidos finalizados para la fecha ${journeyDate}.`);
+      return;
+    }
+
+    const participantScores = calcJourneyScores(
+      users,
+      bets,
+      results,
+      matchesOfDay
+    );
+
+    const summary = {
+      date: journeyDate,
+      matches: matchesOfDay.map((match) => ({
+        id: match.id,
+        stage: match.stage,
+        group: match.group,
+        home: match.home,
+        away: match.away,
+        date: match.date,
+        time: match.time,
+        stadium: match.stadium,
+        city: match.city,
+        result: results[match.id] || {},
+      })),
+      participantScores,
+    };
+
+    await saveJourneySummary(journeyDate, summary);
+
+    setToast(`Jornada ${journeyDate} cerrada correctamente.`);
+  } catch (error) {
+    console.error("Error cerrando jornada:", error);
+    setToast("No se pudo cerrar la jornada.");
+  }
+}
+
   const userBets = activeUser ? bets[activeUser] || {} : {};
-  const userImportedMatches = activeUser ? store.importedMatches?.[activeUser] || {} : {};
   const filteredGroupMatches = GROUP_MATCHES
     .filter((match) => groupFilter === "ALL" || match.group === groupFilter)
-    .map((match) => enrichMatch(match, userImportedMatches));
+    .map((match) => enrichMatch(match, importedMatchesByActiveUser));
   const groupedSchedule = groupMatchesBySection(filteredGroupMatches);
 
   return (
@@ -1695,13 +2244,14 @@ useEffect(() => {
           <HeaderHero
             usersCount={Object.keys(users).length}
             totalPot={totalPot}
-            currency={pot.currency}
+            currency="MXN"
             onImport={() => setShowImport(true)}
             onOpenAdmin={() => setView("adminLogin")}
             onOpenTable={() => setView("table")}
-            onOpenPot={() => setView("pot")}
+            isAdminView={view === "admin"}
           />
           <Container>
+            <JourneySummaryCard summary={latestJourney} />
             <div style={{ display: "grid", gridTemplateColumns: isMobile || isTablet ? "1fr" : "1.15fr 0.85fr", gap: 18 }}>
               <SummaryTable totals={totals} users={users} bets={bets} onOpenUser={goToUser} />
               <div style={{ display: "grid", gap: 18 }}>
@@ -1730,7 +2280,26 @@ useEffect(() => {
 
       {view === "adminLogin" ? (
         <>
-          <TopBar left={<BackButton onClick={() => setView("home")} />} center={<strong>Acceso admin</strong>} right={<div />} />
+          <TopBar
+  left={<BackButton onClick={() => setView("home")} />}
+  center={<strong>Panel admin · resultados reales</strong>}
+  right={
+    <button
+      onClick={logoutAdmin}
+      style={{
+        padding: "8px 12px",
+        borderRadius: 10,
+        border: "1px solid rgba(248,113,113,0.35)",
+        background: "rgba(248,113,113,0.12)",
+        color: "#fca5a5",
+        fontWeight: 700,
+        cursor: "pointer",
+      }}
+    >
+      Salir
+    </button>
+  }
+/>
           <Container>
             <Card style={{ marginTop: 26, padding: 24, maxWidth: 520 }}>
               <div style={{ fontSize: 24, fontWeight: 800, marginBottom: 12 }}>Entrar al panel admin</div>
@@ -1782,29 +2351,124 @@ useEffect(() => {
                 ))}
               </>
             ) : (
-              <BracketView userBets={userBets} importedMatches={userImportedMatches} onSetBet={(id, side, value) => setBet(activeUser, id, side, value)} />
+              <BracketView userBets={userBets} importedMatches={importedMatchesByActiveUser} onSetBet={(id, side, value) => setBet(activeUser, id, side, value)} />
             )}
           </Container>
         </>
       ) : null}
 
       {view === "admin" ? (
-        <>
-          <TopBar left={<BackButton onClick={() => setView("home")} />} center={<strong>Panel admin · resultados reales</strong>} right={<div />} />
-          <Container>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 22 }}>
-              {["ALL", ...Object.keys(GROUPS)].map((group) => (
-                <GhostButton key={group} active={groupFilter === group} onClick={() => setGroupFilter(group)}>
-                  {group === "ALL" ? "Todos los grupos" : `Grupo ${group}`}
-                </GhostButton>
-              ))}
-            </div>
-            {groupMatchesBySection(filteredGroupMatches).map(([title, matches]) => (
-              <ScheduleSection key={title} title={title} matches={matches} bets={{}} results={results} isAdmin onChange={(id, side, value) => setResult(id, side, value)} />
-            ))}
-          </Container>
-        </>
-      ) : null}
+  <>
+    <TopBar left={<BackButton onClick={() => setView("home")} />} center={<strong>Panel admin · resultados reales</strong>} />
+    <Container>
+
+      <Card style={{ padding: 20, marginBottom: 20 }}>
+  <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 10 }}>
+    Herramientas de administrador
+  </div>
+
+  <div style={{ color: "#94a3b8", marginBottom: 14 }}>
+    Desde aquí puedes importar archivos y cerrar la jornada del día.
+  </div>
+
+  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+    <PrimaryButton onClick={() => setShowImport(true)}>
+      Cargar quiniela
+    </PrimaryButton>
+  </div>
+
+  <Card style={{ padding: 20, marginBottom: 20 }}>
+  <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 10 }}>
+    Gestionar participantes
+  </div>
+
+  <div style={{ color: "#94a3b8", marginBottom: 14 }}>
+    Elimina participantes cargados en la quiniela.
+  </div>
+
+  <div style={{ display: "grid", gap: 10 }}>
+    {Object.keys(users).length === 0 ? (
+      <div style={{ color: "#8ea0bb" }}>No hay participantes registrados.</div>
+    ) : (
+      Object.keys(users).map((userName) => (
+        <div
+          key={userName}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            padding: 12,
+            borderRadius: 14,
+            border: "1px solid rgba(255,255,255,0.08)",
+            background: "rgba(255,255,255,0.03)",
+          }}
+        >
+          <div style={{ fontWeight: 700 }}>{userName}</div>
+
+          <button
+            onClick={() => removeUser(userName)}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 12,
+              border: "1px solid rgba(248,113,113,0.35)",
+              background: "rgba(248,113,113,0.12)",
+              color: "#fca5a5",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            Eliminar
+          </button>
+        </div>
+      ))
+    )}
+  </div>
+</Card>
+
+  <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 10 }}>
+    Cerrar jornada
+  </div>
+
+  <div style={{ color: "#94a3b8", marginBottom: 10 }}>
+    Selecciona la fecha para generar el resumen del día.
+  </div>
+
+  <div style={{ display: "flex", gap: 10 }}>
+    <input
+      type="date"
+      value={journeyDate}
+      onChange={(e) => setJourneyDate(e.target.value)}
+    />
+
+    <button onClick={() => closeJourney(journeyDate)}>
+      Cerrar jornada
+    </button>
+  </div>
+</Card>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 22 }}>
+        {["ALL", ...Object.keys(GROUPS)].map((group) => (
+          <GhostButton key={group} active={groupFilter === group} onClick={() => setGroupFilter(group)}>
+            {group === "ALL" ? "Todos los grupos" : `Grupo ${group}`}
+          </GhostButton>
+        ))}
+      </div>
+
+      {groupMatchesBySection(filteredGroupMatches).map(([title, matches]) => (
+  <ScheduleSection
+    key={title}
+    title={title}
+    matches={matches}
+    bets={{}}
+    results={results}
+    isAdmin
+    onChange={(id, side, value) => setResult(id, side, value)}
+  />
+))}
+    </Container>
+  </>
+) : null}
 
       {view === "table" ? (
         <>
@@ -1812,38 +2476,6 @@ useEffect(() => {
           <Container>
             <div style={{ marginTop: 24 }}>
               <SummaryTable totals={totals} users={users} bets={bets} onOpenUser={goToUser} />
-            </div>
-          </Container>
-        </>
-      ) : null}
-
-      {view === "pot" ? (
-        <>
-          <TopBar left={<BackButton onClick={() => setView("home")} />} center={<strong>Bote</strong>} right={<div />} />
-          <Container>
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 18, marginTop: 24 }}>
-              <Card style={{ padding: 22 }}>
-                <div style={{ fontWeight: 800, fontSize: 22, marginBottom: 16 }}>Configuración</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 12 }}>
-                  <div>
-                    <div style={{ color: "#9fb0c8", marginBottom: 6 }}>Cuota por persona</div>
-                    <TextInput type="number" min="0" value={pot.amount} onChange={(event) => setStore((current) => ({ ...current, pot: { ...current.pot, amount: Number(event.target.value) || 0 } }))} />
-                  </div>
-                  <div>
-                    <div style={{ color: "#9fb0c8", marginBottom: 6 }}>Moneda</div>
-                    <select value={pot.currency} onChange={(event) => setStore((current) => ({ ...current, pot: { ...current.pot, currency: event.target.value } }))} style={{ width: "100%", padding: "12px 14px", borderRadius: 14, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "#f8fafc" }}>
-                      {["MXN", "USD", "EUR", "COP", "ARS"].map((currency) => <option key={currency} value={currency}>{currency}</option>)}
-                    </select>
-                  </div>
-                </div>
-              </Card>
-              <Card style={{ padding: 22, display: "grid", placeItems: "center", textAlign: "center" }}>
-                <div>
-                  <div style={{ color: "#facc15", fontWeight: 700, letterSpacing: 1 }}>BOTE TOTAL</div>
-                  <div style={{ fontSize: 54, fontWeight: 900, marginTop: 8 }}>{Number(totalPot).toLocaleString()}</div>
-                  <div style={{ color: "#9fb0c8", marginTop: 8 }}>{pot.currency} · {Object.keys(users).length} participante(s)</div>
-                </div>
-              </Card>
             </div>
           </Container>
         </>
