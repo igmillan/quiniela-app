@@ -7,6 +7,7 @@ import {
   orderBy,
   limit,
   onSnapshot,
+  deleteDoc,
 } from "firebase/firestore";
 import { db } from "./firebase";
 
@@ -40,4 +41,7 @@ export function subscribeLatestJourneySummary(callback) {
       ...docSnap.data(),
     });
   });
+}
+export async function deleteJourneySummary(journeyDate) {
+  await deleteDoc(doc(db, "journadas", journeyDate));
 }

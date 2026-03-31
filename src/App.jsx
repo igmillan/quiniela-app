@@ -7,6 +7,7 @@ import {
 } from "firebase/firestore";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {saveJourneySummary,subscribeLatestJourneySummary,} from "./firebaseStore";
+import { deleteJourneySummary } from "./firebaseStore";
 
 
 const SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
@@ -218,14 +219,20 @@ const FINALS = [
   { id: "FINAL2", stage: "Final", sfA: "SF-03", sfB: "SF-04" },
 ];
 
-const FINAL_MATCHES = 3;
+const THIRD_PLACE = [
+  { id: "3RO-01", stage: "3er lugar", finalA: "FINAL", finalB: "FINAL2" },
+];
 
-const TOTAL_MATCHES =
-  GROUP_MATCHES.length +
-  R16.length +
-  QF.length +
-  SF.length +
-  FINAL_MATCHES;
+const ALL_TOURNAMENT_MATCHES = [
+  ...GROUP_MATCHES,
+  ...R16,
+  ...QF,
+  ...SF,
+  ...FINALS,
+  ...THIRD_PLACE,
+];
+
+const TOTAL_MATCHES = ALL_TOURNAMENT_MATCHES.length;
 
 const MATCH_META = buildDefaultMatchMeta();
 
@@ -359,38 +366,88 @@ function calcScore(bet, result) {
   return sign(bH - bA) === sign(rH - rA) ? 1 : 0;
 }
 
-function computeStandings(bets) {
-  const standings = {};
+
+function matchHasCompleteScore(score) {
+  return (
+    score &&
+    score.home !== undefined &&
+    score.away !== undefined &&
+    score.home !== "" &&
+    score.away !== "" &&
+    !Number.isNaN(Number(score.home)) &&
+    !Number.isNaN(Number(score.away))
+  );
+}
+
+function sortStandingRows(rows) {
+  return rows
+    .slice()
+    .sort((a, b) => {
+      if (b.pts !== a.pts) return b.pts - a.pts;
+      if (b.gd !== a.gd) return b.gd - a.gd;
+      if (b.gf !== a.gf) return b.gf - a.gf;
+      return a.team.localeCompare(b.team);
+    });
+}
+
+function computeGroupTables(scoreMap) {
+  const tables = {};
+
   Object.entries(GROUPS).forEach(([group, teams]) => {
     const stats = {};
     teams.forEach((team) => {
-      stats[team] = { pts: 0, gf: 0, ga: 0 };
+      const clean = cleanTeamName(team);
+      stats[clean] = {
+        team: clean,
+        played: 0,
+        pts: 0,
+        gf: 0,
+        ga: 0,
+        gd: 0,
+      };
     });
 
     GROUP_MATCHES.filter((match) => match.group === group).forEach((match) => {
-      const bet = bets[match.id];
-      if (!bet || bet.home === "" || bet.away === "") return;
-      const home = +bet.home;
-      const away = +bet.away;
-      if (Number.isNaN(home) || Number.isNaN(away)) return;
-      stats[match.home].gf += home;
-      stats[match.home].ga += away;
-      stats[match.away].gf += away;
-      stats[match.away].ga += home;
-      if (home > away) stats[match.home].pts += 3;
-      else if (home < away) stats[match.away].pts += 3;
-      else {
-        stats[match.home].pts += 1;
-        stats[match.away].pts += 1;
+      const score = scoreMap?.[match.id];
+      if (!matchHasCompleteScore(score)) return;
+
+      const home = cleanTeamName(match.home);
+      const away = cleanTeamName(match.away);
+      const homeGoals = Number(score.home);
+      const awayGoals = Number(score.away);
+
+      stats[home].played += 1;
+      stats[away].played += 1;
+      stats[home].gf += homeGoals;
+      stats[home].ga += awayGoals;
+      stats[away].gf += awayGoals;
+      stats[away].ga += homeGoals;
+
+      if (homeGoals > awayGoals) {
+        stats[home].pts += 3;
+      } else if (awayGoals > homeGoals) {
+        stats[away].pts += 3;
+      } else {
+        stats[home].pts += 1;
+        stats[away].pts += 1;
       }
     });
 
-    standings[group] = teams.slice().sort((a, b) => {
-      const sa = stats[a];
-      const sb = stats[b];
-      if (sb.pts !== sa.pts) return sb.pts - sa.pts;
-      return (sb.gf - sb.ga) - (sa.gf - sa.ga);
+    Object.values(stats).forEach((row) => {
+      row.gd = row.gf - row.ga;
     });
+
+    tables[group] = sortStandingRows(Object.values(stats));
+  });
+
+  return tables;
+}
+
+function computeStandings(scoreMap) {
+  const tables = computeGroupTables(scoreMap);
+  const standings = {};
+  Object.keys(tables).forEach((group) => {
+    standings[group] = tables[group].map((row) => row.team);
   });
   return standings;
 }
@@ -403,7 +460,98 @@ function getSecond(standings, group) {
   return standings[group]?.[1] || `2° ${group}`;
 }
 
+function decideWinner(home, away, score) {
+  if (!matchHasCompleteScore(score)) return null;
+  const homeGoals = Number(score.home);
+  const awayGoals = Number(score.away);
+  if (homeGoals === awayGoals) return null;
+  return homeGoals > awayGoals ? home : away;
+}
 
+function decideLoser(home, away, score) {
+  if (!matchHasCompleteScore(score)) return null;
+  const homeGoals = Number(score.home);
+  const awayGoals = Number(score.away);
+  if (homeGoals === awayGoals) return null;
+  return homeGoals > awayGoals ? away : home;
+}
+
+function buildResolvedTournamentMatches(scoreMap, importedMatches = {}) {
+  const standings = computeStandings(scoreMap);
+
+  const resolvedR16 = R16.map((match) => {
+    const imported = importedMatches[match.id] || {};
+    const home = cleanTeamName(imported.home || getFirst(standings, match.grpA));
+    const away = cleanTeamName(imported.away || getSecond(standings, match.grpB));
+    return enrichMatch({ ...match, home, away }, importedMatches);
+  });
+
+  const getR16Winner = (id) => {
+    const match = resolvedR16.find((item) => item.id === id);
+    return match ? decideWinner(match.home, match.away, scoreMap?.[id]) || `Ganador ${id}` : `Ganador ${id}`;
+  };
+
+  const resolvedQF = QF.map((match) => {
+    const imported = importedMatches[match.id] || {};
+    const home = cleanTeamName(imported.home || getR16Winner(match.r16A));
+    const away = cleanTeamName(imported.away || getR16Winner(match.r16B));
+    return enrichMatch({ ...match, home, away }, importedMatches);
+  });
+
+  const getQFWinner = (id) => {
+    const match = resolvedQF.find((item) => item.id === id);
+    return match ? decideWinner(match.home, match.away, scoreMap?.[id]) || `Ganador ${id}` : `Ganador ${id}`;
+  };
+
+  const resolvedSF = SF.map((match) => {
+    const imported = importedMatches[match.id] || {};
+    const home = cleanTeamName(imported.home || getQFWinner(match.qfA));
+    const away = cleanTeamName(imported.away || getQFWinner(match.qfB));
+    return enrichMatch({ ...match, home, away }, importedMatches);
+  });
+
+  const getSFWinner = (id) => {
+    const match = resolvedSF.find((item) => item.id === id);
+    return match ? decideWinner(match.home, match.away, scoreMap?.[id]) || `Ganador ${id}` : `Ganador ${id}`;
+  };
+
+  const getSFLoser = (id) => {
+    const match = resolvedSF.find((item) => item.id === id);
+    return match ? decideLoser(match.home, match.away, scoreMap?.[id]) || `Perdedor ${id}` : `Perdedor ${id}`;
+  };
+
+  const resolvedFinals = FINALS.map((match) => {
+    const imported = importedMatches[match.id] || {};
+    const home = cleanTeamName(imported.home || getSFWinner(match.sfA));
+    const away = cleanTeamName(imported.away || getSFWinner(match.sfB));
+    return enrichMatch({ ...match, home, away }, importedMatches);
+  });
+
+  const getFinalLoser = (id) => {
+    const match = resolvedFinals.find((item) => item.id === id);
+    return match ? decideLoser(match.home, match.away, scoreMap?.[id]) || `Perdedor ${id}` : `Perdedor ${id}`;
+  };
+
+  const resolvedThird = THIRD_PLACE.map((match) => {
+    const imported = importedMatches[match.id] || {};
+    const home = cleanTeamName(imported.home || getFinalLoser(match.finalA));
+    const away = cleanTeamName(imported.away || getFinalLoser(match.finalB));
+    return enrichMatch({ ...match, home, away }, importedMatches);
+  });
+
+  return {
+    standings,
+    groupTables: computeGroupTables(scoreMap),
+    groups: GROUP_MATCHES.map((match) => enrichMatch(match, importedMatches)),
+    r16: resolvedR16,
+    qf: resolvedQF,
+    sf: resolvedSF,
+    finals: resolvedFinals,
+    third: resolvedThird,
+    knockout: [...resolvedR16, ...resolvedQF, ...resolvedSF, ...resolvedFinals, ...resolvedThird],
+    all: [...GROUP_MATCHES.map((match) => enrichMatch(match, importedMatches)), ...resolvedR16, ...resolvedQF, ...resolvedSF, ...resolvedFinals, ...resolvedThird],
+  };
+}
 
 function cleanTeamName(name) {
   if (!name) return "";
@@ -945,12 +1093,6 @@ function HeaderHero({
                 <GhostButton onClick={onOpenAdmin}>
                   Admin
                 </GhostButton>
-
-                {isAdminView ? (
-                  <GhostButton onClick={onImport}>
-                    Cargar quiniela
-                  </GhostButton>
-                ) : null}
               </div>
 
               <div
@@ -1330,7 +1472,7 @@ const scoreInputStyle = {
 function getMatchesByDate(matchesMap, results, targetDate) {
   return Object.values(matchesMap || {}).filter((match) => {
     if (!match?.date) return false;
-    if (match.date !== targetDate) return false;
+    if (normalizeDateValue(match.date) !== normalizeDateValue(targetDate)) return false;
 
     const result = results?.[match.id];
     if (!result) return false;
@@ -1736,6 +1878,95 @@ function BracketCenter({ finalItem, thirdItem, onSetBet }) {
   );
 }
 
+
+function GroupComparisonBoard({ predictionMap, officialMap }) {
+  const predictedTables = computeGroupTables(predictionMap);
+  const officialTables = computeGroupTables(officialMap);
+
+  return (
+    <Card style={{ padding: 20, marginTop: 22 }}>
+      <div style={{ fontWeight: 800, fontSize: 22, marginBottom: 8 }}>
+        Grupos · apuesta vs realidad
+      </div>
+      <div style={{ color: "#94a3b8", marginBottom: 18 }}>
+        Cuadro comparativo por grupo usando puntos, diferencia de goles y goles a favor.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+        {Object.keys(GROUPS).map((group) => {
+          const predicted = predictedTables[group] || [];
+          const official = officialTables[group] || [];
+
+          const renderRows = (rows, accent) => (
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "24px 1fr repeat(4, 36px)", gap: 8, color: "#64748b", fontSize: 11, fontWeight: 700 }}>
+                <div>#</div><div>Equipo</div><div style={{textAlign:"center"}}>PTS</div><div style={{textAlign:"center"}}>DG</div><div style={{textAlign:"center"}}>GF</div><div style={{textAlign:"center"}}>PJ</div>
+              </div>
+              {rows.map((row, index) => (
+                <div key={row.team} style={{
+                  display: "grid",
+                  gridTemplateColumns: "24px 1fr repeat(4, 36px)",
+                  gap: 8,
+                  alignItems: "center",
+                  padding: "6px 8px",
+                  borderRadius: 10,
+                  background: index < 2 ? `${accent}16` : "rgba(255,255,255,0.02)",
+                }}>
+                  <div style={{ color: "#94a3b8", fontWeight: 800 }}>{index + 1}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <span>{getFlag(row.team)}</span>
+                    <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 700 }}>{row.team}</span>
+                  </div>
+                  <div style={{ textAlign: "center", fontWeight: 700 }}>{row.pts}</div>
+                  <div style={{ textAlign: "center", color: "#94a3b8" }}>{row.gd}</div>
+                  <div style={{ textAlign: "center", color: "#94a3b8" }}>{row.gf}</div>
+                  <div style={{ textAlign: "center", color: "#94a3b8" }}>{row.played}</div>
+                </div>
+              ))}
+            </div>
+          );
+
+          return (
+            <div key={group} style={{
+              borderRadius: 18,
+              border: "1px solid rgba(255,255,255,0.08)",
+              background: "linear-gradient(180deg, rgba(15,23,42,0.86), rgba(7,11,20,0.96))",
+              padding: 14,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                <div style={{ fontWeight: 900, fontSize: 18 }}>Grupo {group}</div>
+                <div style={{ color: "#7dd3fc", fontSize: 12, fontWeight: 800 }}>Comparativo</div>
+              </div>
+
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{
+                  borderRadius: 16,
+                  border: "1px solid rgba(52,211,153,0.18)",
+                  background: "rgba(52,211,153,0.05)",
+                  padding: 12,
+                }}>
+                  <div style={{ fontWeight: 800, marginBottom: 10, color: "#86efac" }}>Tu apuesta</div>
+                  {renderRows(predicted, "rgba(52,211,153,1)")}
+                </div>
+
+                <div style={{
+                  borderRadius: 16,
+                  border: "1px solid rgba(250,204,21,0.18)",
+                  background: "rgba(250,204,21,0.05)",
+                  padding: 12,
+                }}>
+                  <div style={{ fontWeight: 800, marginBottom: 10, color: "#fde68a" }}>Avance real</div>
+                  {renderRows(official, "rgba(250,204,21,1)")}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 function BracketView({ userBets, importedMatches = {}, onSetBet }) {
   const { isMobile } = useViewport();
   const standings = computeStandings(userBets);
@@ -1950,6 +2181,8 @@ export default function App() {
   const [showImport, setShowImport] = useState(false);
   const [toast, setToast] = useState("");
   const [groupFilter, setGroupFilter] = useState("ALL");
+  const [calendarTab, setCalendarTab] = useState("groups");
+  const [adminFilter, setAdminFilter] = useState("ALL");
   const [bracketMode, setBracketMode] = useState(false);
   const lastSavedRef = useRef("");
   const [journeyDate, setJourneyDate] = useState("");
@@ -2034,11 +2267,16 @@ useEffect(() => {
   
   const firstImportedUser = Object.keys(importedMatches)[0] || null;
 
-const importedMatchesByActiveUser = activeUser
-  ? importedMatches[activeUser] || {}
-  : firstImportedUser
-    ? importedMatches[firstImportedUser] || {}
-    : {};
+  const importedMatchesByActiveUser = activeUser
+    ? importedMatches[activeUser] || {}
+    : firstImportedUser
+      ? importedMatches[firstImportedUser] || {}
+      : {};
+
+  const officialTournament = useMemo(
+    () => buildResolvedTournamentMatches(results, importedMatchesByActiveUser),
+    [results, importedMatchesByActiveUser]
+  );
 
   const totals = useMemo(() => {
     return Object.keys(users)
@@ -2046,7 +2284,8 @@ const importedMatchesByActiveUser = activeUser
         let pts = 0;
         let exact = 0;
         let resultHits = 0;
-        GROUP_MATCHES.forEach((match) => {
+
+        ALL_TOURNAMENT_MATCHES.forEach((match) => {
           const score = calcScore(bets[user]?.[match.id], results[match.id]);
           if (score === 3) {
             pts += 3;
@@ -2056,9 +2295,10 @@ const importedMatchesByActiveUser = activeUser
             resultHits += 1;
           }
         });
+
         return { user, pts, exact, result: resultHits, color: users[user]?.color };
       })
-      .sort((a, b) => b.pts - a.pts);
+      .sort((a, b) => (b.pts - a.pts) || (b.exact - a.exact));
   }, [users, bets, results]);
 
   const setBet = (user, id, side, value) => {
@@ -2182,10 +2422,25 @@ function removeUser(userName) {
   setToast(`${userName} fue eliminado de la quiniela.`);
 }
 
+async function removeJourney(journeyDate) {
+  const confirmed = window.confirm(
+    `¿Eliminar la jornada ${journeyDate}?`
+  );
+  if (!confirmed) return;
+
+  try {
+    await deleteJourneySummary(journeyDate);
+    setToast(`Jornada eliminada.`);
+  } catch (err) {
+    console.error(err);
+    setToast("Error eliminando jornada.");
+  }
+}
+
 async function closeJourney(journeyDate) {
   try {
     const matchesOfDay = getMatchesByDate(
-      importedMatchesByActiveUser,
+      Object.fromEntries(officialTournament.all.map((match) => [match.id, match])),
       results,
       journeyDate
     );
@@ -2229,10 +2484,32 @@ async function closeJourney(journeyDate) {
 }
 
   const userBets = activeUser ? bets[activeUser] || {} : {};
+  const userProjectedTournament = useMemo(
+    () => buildResolvedTournamentMatches(userBets, importedMatchesByActiveUser),
+    [userBets, importedMatchesByActiveUser]
+  );
+
   const filteredGroupMatches = GROUP_MATCHES
     .filter((match) => groupFilter === "ALL" || match.group === groupFilter)
     .map((match) => enrichMatch(match, importedMatchesByActiveUser));
   const groupedSchedule = groupMatchesBySection(filteredGroupMatches);
+
+  const adminPhaseOptions = [
+    { key: "ALL", label: "Todo el torneo" },
+    { key: "Grupos", label: "Grupos" },
+    { key: "16avos", label: "16avos" },
+    { key: "Cuartos", label: "Cuartos" },
+    { key: "Semis", label: "Semis" },
+    { key: "Final", label: "Final" },
+    { key: "3er lugar", label: "3er lugar" },
+  ];
+
+  const filteredAdminMatches = officialTournament.all.filter((match) => {
+    if (adminFilter === "ALL") return true;
+    return match.stage === adminFilter;
+  });
+
+  const groupedAdminSchedule = groupMatchesBySection(filteredAdminMatches);
 
   return (
     <Shell>
@@ -2248,7 +2525,7 @@ async function closeJourney(journeyDate) {
             onImport={() => setShowImport(true)}
             onOpenAdmin={() => setView("adminLogin")}
             onOpenTable={() => setView("table")}
-            isAdminView={view === "admin"}
+            isAdminView={isAdminUnlocked}
           />
           <Container>
             <JourneySummaryCard summary={latestJourney} />
@@ -2339,16 +2616,46 @@ async function closeJourney(journeyDate) {
 
             {!bracketMode ? (
               <>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20 }}>
-                  {["ALL", ...Object.keys(GROUPS)].map((group) => (
-                    <GhostButton key={group} active={groupFilter === group} onClick={() => setGroupFilter(group)}>
-                      {group === "ALL" ? "Todos los grupos" : `Grupo ${group}`}
-                    </GhostButton>
-                  ))}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20, marginBottom: 12 }}>
+                  <GhostButton active={calendarTab === "groups"} onClick={() => setCalendarTab("groups")}>
+                    Grupos
+                  </GhostButton>
+                  <GhostButton active={calendarTab === "matches"} onClick={() => setCalendarTab("matches")}>
+                    Partidos
+                  </GhostButton>
                 </div>
-                {groupedSchedule.map(([title, matches]) => (
-                  <ScheduleSection key={title} title={title} matches={matches} bets={userBets} results={results} onChange={(id, side, value) => setBet(activeUser, id, side, value)} />
-                ))}
+
+                {calendarTab === "groups" ? (
+                  <GroupComparisonBoard
+                    predictionMap={userBets}
+                    officialMap={results}
+                  />
+                ) : (
+                  <>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 4, marginBottom: 10 }}>
+                      {["ALL", ...Object.keys(GROUPS)].map((group) => (
+                        <GhostButton
+                          key={group}
+                          active={groupFilter === group}
+                          onClick={() => setGroupFilter(group)}
+                        >
+                          {group === "ALL" ? "Todos los grupos" : `Grupo ${group}`}
+                        </GhostButton>
+                      ))}
+                    </div>
+
+                    {groupedSchedule.map(([title, matches]) => (
+                      <ScheduleSection
+                        key={title}
+                        title={title}
+                        matches={matches}
+                        bets={userBets}
+                        results={results}
+                        onChange={(id, side, value) => setBet(activeUser, id, side, value)}
+                      />
+                    ))}
+                  </>
+                )}
               </>
             ) : (
               <BracketView userBets={userBets} importedMatches={importedMatchesByActiveUser} onSetBet={(id, side, value) => setBet(activeUser, id, side, value)} />
@@ -2430,6 +2737,59 @@ async function closeJourney(journeyDate) {
     Cerrar jornada
   </div>
 
+<Card style={{ padding: 20, marginBottom: 20 }}>
+  <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 10 }}>
+    Gestionar jornadas
+  </div>
+
+  <div style={{ color: "#94a3b8", marginBottom: 14 }}>
+    Elimina reportes de jornada guardados en la quiniela.
+  </div>
+
+  {!latestJourney ? (
+    <div style={{ color: "#8ea0bb" }}>
+      No hay jornadas registradas.
+    </div>
+  ) : (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        padding: 12,
+        borderRadius: 14,
+        border: "1px solid rgba(255,255,255,0.08)",
+        background: "rgba(255,255,255,0.03)",
+      }}
+    >
+      <div>
+        <div style={{ fontWeight: 700 }}>
+          Jornada {latestJourney.date}
+        </div>
+        <div style={{ color: "#94a3b8", fontSize: 13, marginTop: 4 }}>
+          Última jornada cerrada
+        </div>
+      </div>
+
+      <button
+        onClick={() => removeJourney(latestJourney.date)}
+        style={{
+          padding: "10px 14px",
+          borderRadius: 12,
+          border: "1px solid rgba(248,113,113,0.35)",
+          background: "rgba(248,113,113,0.12)",
+          color: "#fca5a5",
+          cursor: "pointer",
+          fontWeight: 700,
+          transition: "all 0.2s ease",
+        }}
+      >
+        Eliminar jornada
+      </button>
+    </div>
+  )}
+</Card>
   <div style={{ color: "#94a3b8", marginBottom: 10 }}>
     Selecciona la fecha para generar el resumen del día.
   </div>
@@ -2448,24 +2808,24 @@ async function closeJourney(journeyDate) {
 </Card>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 22 }}>
-        {["ALL", ...Object.keys(GROUPS)].map((group) => (
-          <GhostButton key={group} active={groupFilter === group} onClick={() => setGroupFilter(group)}>
-            {group === "ALL" ? "Todos los grupos" : `Grupo ${group}`}
+        {adminPhaseOptions.map((phase) => (
+          <GhostButton key={phase.key} active={adminFilter === phase.key} onClick={() => setAdminFilter(phase.key)}>
+            {phase.label}
           </GhostButton>
         ))}
       </div>
 
-      {groupMatchesBySection(filteredGroupMatches).map(([title, matches]) => (
-  <ScheduleSection
-    key={title}
-    title={title}
-    matches={matches}
-    bets={{}}
-    results={results}
-    isAdmin
-    onChange={(id, side, value) => setResult(id, side, value)}
-  />
-))}
+      {groupedAdminSchedule.map(([title, matches]) => (
+        <ScheduleSection
+          key={title}
+          title={title}
+          matches={matches}
+          bets={{}}
+          results={results}
+          isAdmin
+          onChange={(id, side, value) => setResult(id, side, value)}
+        />
+      ))}
     </Container>
   </>
 ) : null}
@@ -2483,3 +2843,4 @@ async function closeJourney(journeyDate) {
     </Shell>
   );
 }
+
