@@ -1,5 +1,6 @@
 {
   "routes": [
+    { "handle": "filesystem" },
     {
       "src": "/(.*\\.xlsm)",
       "headers": {
@@ -8,7 +9,7 @@
       "dest": "/$1"
     },
     {
-      "src": "/(.*)",
+      "src": "/.*",
       "dest": "/index.html"
     }
   ]
