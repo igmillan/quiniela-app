@@ -11,6 +11,7 @@ import {
   subscribeLatestJourneySummary,
   deleteJourneySummary,
 } from "./firebaseStore";
+import InfografiaPromo from "./InfografiaPromo";
 
 
 /**
@@ -1195,6 +1196,7 @@ function HeaderHero({
   onImport,
   onOpenAdmin,
   onOpenTable,
+  onOpenPromo,
   onOpenPot,
   isAdminView = false,
 }) {
@@ -1305,28 +1307,34 @@ function HeaderHero({
                 quiniela con clasificación, bote y resumen en tiempo real.
               </p>
 
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 12,
-                  marginTop: 22,
-                  alignItems: "center",
-                }}
-              >
-                <PrimaryButton onClick={onOpenTable}>
-                  Ver clasificación
-                </PrimaryButton>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <PrimaryButton onClick={onImport}>Importar quiniela</PrimaryButton>
 
-                <GhostButton onClick={onOpenAdmin}>
-                  Admin
-                </GhostButton>
+                <a
+                  href="/Quiniela_Mundial_Pro_2026.xlsm"
+                  download
+                  style={{
+                    textDecoration: "none",
+                  }}
+                >
+                  <button
+                    style={{
+                      background: "#22C55E",
+                      color: "#0B1220",
+                      fontWeight: 800,
+                      padding: "10px 16px",
+                      borderRadius: 10,
+                      border: "none",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Descargar Excel
+                  </button>
+                </a>
 
-                {isAdminView ? (
-                  <GhostButton onClick={onImport}>
-                    Cargar quiniela
-                  </GhostButton>
-                ) : null}
+                <GhostButton onClick={onOpenTable}>Ver clasificación</GhostButton>
+                <GhostButton onClick={onOpenPromo}>Ver promo</GhostButton>
+                <GhostButton onClick={onOpenAdmin}>Admin</GhostButton>
               </div>
 
               <div
@@ -3004,6 +3012,7 @@ async function removeJourney(journeyDate) {
             onImport={() => setShowImport(true)}
             onOpenAdmin={() => setView("adminLogin")}
             onOpenTable={() => setView("table")}
+            onOpenPromo={() => setView("promo")}
             isAdminView={view === "admin"}
           />
           <Container>
@@ -3031,6 +3040,13 @@ async function removeJourney(journeyDate) {
               </div>
             </div>
           </Container>
+        </>
+      ) : null}
+
+      {view === "promo" ? (
+        <>
+          <TopBar left={<BackButton onClick={() => setView("home")} />} center={<strong>Landing promocional</strong>} />
+          <InfografiaPromo />
         </>
       ) : null}
 
@@ -3318,4 +3334,5 @@ async function removeJourney(journeyDate) {
     </Shell>
   );
 }
+
 
