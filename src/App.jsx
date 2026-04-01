@@ -1311,25 +1311,23 @@ function HeaderHero({
                 <PrimaryButton onClick={onImport}>Importar quiniela</PrimaryButton>
 
                 <a
-                  href="/Quiniela_Mundial_Pro_2026.xlsm"
-                  download
+                  href="/plantilla_quiniela.xlsm"
+                  download="plantilla_quiniela.xlsm"
                   style={{
+                    padding: "10px 14px",
+                    borderRadius: 14,
+                    border: "1px solid rgba(34,197,94,0.35)",
+                    background: "rgba(34,197,94,0.12)",
+                    color: "#d9fbe8",
+                    cursor: "pointer",
+                    fontWeight: 700,
                     textDecoration: "none",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                 >
-                  <button
-                    style={{
-                      background: "#22C55E",
-                      color: "#0B1220",
-                      fontWeight: 800,
-                      padding: "10px 16px",
-                      borderRadius: 10,
-                      border: "none",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Descargar Excel
-                  </button>
+                  Descargar Excel
                 </a>
 
                 <GhostButton onClick={onOpenTable}>Ver clasificación</GhostButton>
