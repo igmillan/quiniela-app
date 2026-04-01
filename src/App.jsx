@@ -6,9 +6,43 @@ import {
   onSnapshot
 } from "firebase/firestore";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {saveJourneySummary,subscribeLatestJourneySummary,} from "./firebaseStore";
-import { deleteJourneySummary } from "./firebaseStore";
+import {
+  saveJourneySummary,
+  subscribeLatestJourneySummary,
+  deleteJourneySummary,
+} from "./firebaseStore";
 
+
+/**
+ * Quiniela Mundial 2026
+ * ------------------------------------------------------------
+ * ARQUITECTURA GENERAL
+ * ------------------------------------------------------------
+ * 1) Importación Excel:
+ *    - Se importa la quiniela del usuario desde el archivo Excel.
+ *    - La hoja de grupos es la única fuente confiable para standings.
+ *    - Las hojas knockout pueden contener fórmulas; por eso NO deben
+ *      tomarse como fuente absoluta para poblar equipos futuros.
+ *
+ * 2) Dos mundos separados:
+ *    - Apuesta del usuario: marcadores importados desde Excel / edición usuario.
+ *    - Resultados oficiales: marcadores capturados por admin.
+ *
+ * 3) Motor del torneo:
+ *    - El avance real del torneo debe construirse por lógica:
+ *      standings + terceros + ganadores/perdedores por fase.
+ *    - La app evita depender de fórmulas calculadas del .xlsm.
+ *
+ * 4) Persistencia:
+ *    - Firestore guarda store global, jornadas y resultados.
+ *
+ * 5) Vistas:
+ *    - Home / usuario / admin / tabla.
+ *
+ * NOTA DE MANTENIMIENTO:
+ * - Si cambia la estructura del Excel, revisar primero parseExcel(),
+ *   readPhaseSheet() y el motor de resolución de llaves.
+ */
 
 const SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
 const ADMIN_PASSWORD = "mundial2026";
@@ -28,30 +62,31 @@ const GROUPS = {
   L: ["Inglaterra", "Croacia", "Ghana", "Panamá"],
 };
 
-const FLAGS = {
+const // Mapa central de banderas.
+// Se mantiene aquí porque:
+// 1) evita depender del Excel para símbolos visuales
+// 2) permite corregir banderas erróneas en un solo lugar
+// 3) soporta cruces de repechaje mostrando doble bandera cuando aplica
+FLAGS = {
   "México": "🇲🇽",
   "Sudáfrica": "🇿🇦",
   "Corea del Sur": "🇰🇷",
-  "Rep. Checa/Dinamarca*": "🏳️",
   "Canadá": "🇨🇦",
-  "Bosnia/Italia*": "🏳️",
   "Qatar": "🇶🇦",
   "Suiza": "🇨🇭",
   "Brasil": "🇧🇷",
   "Marruecos": "🇲🇦",
   "Haití": "🇭🇹",
-  "Escocia": "🏴",
+  "Escocia": "🏴󠁧󠁢󠁳󠁣󠁴󠁿",
   "Estados Unidos": "🇺🇸",
   "Paraguay": "🇵🇾",
   "Australia": "🇦🇺",
-  "Kosovo/Turquía*": "🏳️",
   "Alemania": "🇩🇪",
-  "Curazao": "🏳️",
+  "Curazao": "🇨🇼",
   "Costa de Marfil": "🇨🇮",
   "Ecuador": "🇪🇨",
   "Países Bajos": "🇳🇱",
   "Japón": "🇯🇵",
-  "Suecia/Polonia*": "🏳️",
   "Túnez": "🇹🇳",
   "Bélgica": "🇧🇪",
   "Egipto": "🇪🇬",
@@ -63,17 +98,15 @@ const FLAGS = {
   "Uruguay": "🇺🇾",
   "Francia": "🇫🇷",
   "Senegal": "🇸🇳",
-  "Bolivia/Irak*": "🏳️",
   "Noruega": "🇳🇴",
   "Argentina": "🇦🇷",
   "Argelia": "🇩🇿",
   "Austria": "🇦🇹",
   "Jordania": "🇯🇴",
   "Portugal": "🇵🇹",
-  "Jamaica/RD Congo*": "🏳️",
   "Uzbekistán": "🇺🇿",
   "Colombia": "🇨🇴",
-  "Inglaterra": "🏴",
+  "Inglaterra": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
   "Croacia": "🇭🇷",
   "Ghana": "🇬🇭",
   "Panamá": "🇵🇦",
@@ -94,18 +127,7 @@ const FLAGS = {
   "República Dominicana": "🇩🇴",
   "Congo": "🇨🇩",
   "Costa Rica": "🇨🇷",
-  "Italia/Bosnia*": "🏳️",
-  "Dinamarca/Rep. Checa*": "🏳️",
-  "Turquía/Kosovo*": "🏳️",
-  "Polonia/Suecia*": "🏳️",
-  "RD Congo/Jamaica*": "🏳️",
-  "Irak/Bolivia*": "🏳️",
-  "Rep. Checa / Dinamarca": "🏳️",
-  "Bosnia / Italia": "🏳️",
-  "Suecia / Polonia": "🏳️",
-  "Kosovo / Turquía": "🏳️",
-  "Jamaica / RD Congo": "🏳️",
-  "Bolivia / Irak": "🏳️",
+
   "Definir ganador": "🏳️",
   "Perdedor SF-01": "🏳️",
   "Perdedor SF-02": "🏳️",
@@ -131,6 +153,10 @@ const STAGE_LABELS = {
   const ENTRY_FEE = 500; // MXN
   const HOUSE_FEE_PERCENT = 0.1; // 10%
 
+/* =============================
+   FIREBASE / PERSISTENCIA
+============================= */
+
 async function loadStoreFromFirebase() {
   console.log("Cargando desde Firebase...");
 
@@ -154,8 +180,22 @@ async function saveStoreToFirebase(store) {
 
   console.log("Guardado OK en Firebase");
 }
+/* =============================
+   CATÁLOGO / UTILIDADES VISUALES
+============================= */
+
 function getFlag(team) {
   const clean = cleanTeamName(team);
+  if (!clean) return "🏳️";
+
+  // Si el nombre es un cruce de repechaje (ej. "Bosnia/Italia*"),
+  // intentamos pintar ambas banderas para no perder contexto visual.
+  if (clean.includes("/")) {
+    const parts = clean.replace(/\*/g, "").split("/").map((x) => cleanTeamName(x)).filter(Boolean);
+    const flags = parts.map((part) => FLAGS[part]).filter(Boolean);
+    if (flags.length) return flags.join(" ");
+  }
+
   return FLAGS[clean] || "🏳️";
 }
 
@@ -200,14 +240,24 @@ const R16 = R16_PAIRS.map(([a, b], i) => ({
   grpB: b,
 }));
 
-const QF = Array.from({ length: 8 }, (_, i) => ({
-  id: `QF-${String(i + 1).padStart(2, "0")}`,
-  stage: "Cuartos",
+// 8vos: cada partido toma 2 ganadores de 16vos consecutivos.
+const OF = Array.from({ length: 8 }, (_, i) => ({
+  id: `OF-${String(i + 1).padStart(2, "0")}`,
+  stage: "8vos",
   r16A: `R16-${String(i * 2 + 1).padStart(2, "0")}`,
   r16B: `R16-${String(i * 2 + 2).padStart(2, "0")}`,
 }));
 
-const SF = Array.from({ length: 4 }, (_, i) => ({
+// 4tos: cada partido toma 2 ganadores de 8vos consecutivos.
+const QF = Array.from({ length: 4 }, (_, i) => ({
+  id: `QF-${String(i + 1).padStart(2, "0")}`,
+  stage: "4tos",
+  ofA: `OF-${String(i * 2 + 1).padStart(2, "0")}`,
+  ofB: `OF-${String(i * 2 + 2).padStart(2, "0")}`,
+}));
+
+// Semifinales: 2 partidos.
+const SF = Array.from({ length: 2 }, (_, i) => ({
   id: `SF-${String(i + 1).padStart(2, "0")}`,
   stage: "Semis",
   qfA: `QF-${String(i * 2 + 1).padStart(2, "0")}`,
@@ -215,24 +265,12 @@ const SF = Array.from({ length: 4 }, (_, i) => ({
 }));
 
 const FINALS = [
+  { id: "3RO-01", stage: "3er lugar", sfA: "SF-01", sfB: "SF-02" },
   { id: "FINAL", stage: "Final", sfA: "SF-01", sfB: "SF-02" },
-  { id: "FINAL2", stage: "Final", sfA: "SF-03", sfB: "SF-04" },
 ];
 
-const THIRD_PLACE = [
-  { id: "3RO-01", stage: "3er lugar", finalA: "FINAL", finalB: "FINAL2" },
-];
-
-const ALL_TOURNAMENT_MATCHES = [
-  ...GROUP_MATCHES,
-  ...R16,
-  ...QF,
-  ...SF,
-  ...FINALS,
-  ...THIRD_PLACE,
-];
-
-const TOTAL_MATCHES = ALL_TOURNAMENT_MATCHES.length;
+const FINAL_MATCHES = 2;
+const TOTAL_MATCHES = 104;
 
 const MATCH_META = buildDefaultMatchMeta();
 
@@ -284,15 +322,28 @@ function buildDefaultMatchMeta() {
     };
   });
 
+  OF.forEach((match, index) => {
+    const venue = venues[index % venues.length];
+    meta[match.id] = {
+      date: `2026-07-${String(6 + Math.floor(index / 4)).padStart(2, "0")}`,
+      dayLabel: `8vos · Día ${Math.floor(index / 4) + 1}`,
+      time: ["13:00", "16:00", "19:00", "21:00"][index % 4],
+      stadium: venue[0],
+      city: venue[1],
+      sectionLabel: `8vos · Día ${Math.floor(index / 4) + 1}`,
+      sortOrder: 250 + index,
+    };
+  });
+
   QF.forEach((match, index) => {
     const venue = venues[index % venues.length];
     meta[match.id] = {
       date: `2026-07-${String(8 + Math.floor(index / 4)).padStart(2, "0")}`,
-      dayLabel: `Cuartos · Día ${Math.floor(index / 4) + 1}`,
+      dayLabel: `4tos · Día ${Math.floor(index / 2) + 1}`,
       time: ["16:00", "20:00"][index % 2],
       stadium: venue[0],
       city: venue[1],
-      sectionLabel: `Cuartos · Día ${Math.floor(index / 4) + 1}`,
+      sectionLabel: `4tos · Día ${Math.floor(index / 2) + 1}`,
       sortOrder: 300 + index,
     };
   });
@@ -314,11 +365,11 @@ function buildDefaultMatchMeta() {
     const venue = venues[index % venues.length];
     meta[match.id] = {
       date: `2026-07-${String(18 + index).padStart(2, "0")}`,
-      dayLabel: index === 0 ? "Final A" : "Final B",
+      dayLabel: match.id === "3RO-01" ? "3er lugar" : "Gran final",
       time: "20:00",
       stadium: venue[0],
       city: venue[1],
-      sectionLabel: "Finales",
+      sectionLabel: match.id === "3RO-01" ? "3er lugar" : "Final",
       sortOrder: 500 + index,
     };
   });
@@ -353,6 +404,10 @@ function groupMatchesBySection(matches) {
   return Array.from(map.entries());
 }
 
+/* =============================
+   LÓGICA DE PUNTOS Y STANDINGS
+============================= */
+
 function calcScore(bet, result) {
   if (!result || result.home === "" || result.home === undefined) return null;
   if (!bet || bet.home === "" || bet.home === undefined) return null;
@@ -366,90 +421,80 @@ function calcScore(bet, result) {
   return sign(bH - bA) === sign(rH - rA) ? 1 : 0;
 }
 
-
-function matchHasCompleteScore(score) {
-  return (
-    score &&
-    score.home !== undefined &&
-    score.away !== undefined &&
-    score.home !== "" &&
-    score.away !== "" &&
-    !Number.isNaN(Number(score.home)) &&
-    !Number.isNaN(Number(score.away))
-  );
-}
-
-function sortStandingRows(rows) {
-  return rows
-    .slice()
-    .sort((a, b) => {
-      if (b.pts !== a.pts) return b.pts - a.pts;
-      if (b.gd !== a.gd) return b.gd - a.gd;
-      if (b.gf !== a.gf) return b.gf - a.gf;
-      return a.team.localeCompare(b.team);
-    });
-}
-
-function computeGroupTables(scoreMap) {
-  const tables = {};
-
+function computeStandings(bets) {
+  const standings = {};
   Object.entries(GROUPS).forEach(([group, teams]) => {
     const stats = {};
     teams.forEach((team) => {
-      const clean = cleanTeamName(team);
-      stats[clean] = {
-        team: clean,
-        played: 0,
-        pts: 0,
-        gf: 0,
-        ga: 0,
-        gd: 0,
-      };
+      stats[team] = { pts: 0, gf: 0, ga: 0 };
+    });
+
+    GROUP_MATCHES.filter((match) => match.group === group).forEach((match) => {
+      const bet = bets[match.id];
+      if (!bet || bet.home === "" || bet.away === "") return;
+      const home = +bet.home;
+      const away = +bet.away;
+      if (Number.isNaN(home) || Number.isNaN(away)) return;
+      stats[match.home].gf += home;
+      stats[match.home].ga += away;
+      stats[match.away].gf += away;
+      stats[match.away].ga += home;
+      if (home > away) stats[match.home].pts += 3;
+      else if (home < away) stats[match.away].pts += 3;
+      else {
+        stats[match.home].pts += 1;
+        stats[match.away].pts += 1;
+      }
+    });
+
+    standings[group] = teams.slice().sort((a, b) => {
+      const sa = stats[a];
+      const sb = stats[b];
+      if (sb.pts !== sa.pts) return sb.pts - sa.pts;
+      return (sb.gf - sb.ga) - (sa.gf - sa.ga);
+    });
+  });
+  return standings;
+}
+
+
+function computeGroupTablesDetailed(scoreMap) {
+  const tables = {};
+  Object.entries(GROUPS).forEach(([group, teams]) => {
+    const stats = {};
+    teams.forEach((team) => {
+      stats[team] = { team, pj: 0, pts: 0, gf: 0, ga: 0, gd: 0 };
     });
 
     GROUP_MATCHES.filter((match) => match.group === group).forEach((match) => {
       const score = scoreMap?.[match.id];
-      if (!matchHasCompleteScore(score)) return;
+      if (!score || score.home === "" || score.away === "" || score.home === undefined || score.away === undefined) return;
+      const home = Number(score.home);
+      const away = Number(score.away);
+      if (Number.isNaN(home) || Number.isNaN(away)) return;
 
-      const home = cleanTeamName(match.home);
-      const away = cleanTeamName(match.away);
-      const homeGoals = Number(score.home);
-      const awayGoals = Number(score.away);
+      stats[match.home].pj += 1;
+      stats[match.away].pj += 1;
+      stats[match.home].gf += home;
+      stats[match.home].ga += away;
+      stats[match.away].gf += away;
+      stats[match.away].ga += home;
+      stats[match.home].gd = stats[match.home].gf - stats[match.home].ga;
+      stats[match.away].gd = stats[match.away].gf - stats[match.away].ga;
 
-      stats[home].played += 1;
-      stats[away].played += 1;
-      stats[home].gf += homeGoals;
-      stats[home].ga += awayGoals;
-      stats[away].gf += awayGoals;
-      stats[away].ga += homeGoals;
-
-      if (homeGoals > awayGoals) {
-        stats[home].pts += 3;
-      } else if (awayGoals > homeGoals) {
-        stats[away].pts += 3;
-      } else {
-        stats[home].pts += 1;
-        stats[away].pts += 1;
+      if (home > away) stats[match.home].pts += 3;
+      else if (away > home) stats[match.away].pts += 3;
+      else {
+        stats[match.home].pts += 1;
+        stats[match.away].pts += 1;
       }
     });
 
-    Object.values(stats).forEach((row) => {
-      row.gd = row.gf - row.ga;
-    });
-
-    tables[group] = sortStandingRows(Object.values(stats));
+    tables[group] = teams
+      .map((team) => stats[team])
+      .sort((a, b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf);
   });
-
   return tables;
-}
-
-function computeStandings(scoreMap) {
-  const tables = computeGroupTables(scoreMap);
-  const standings = {};
-  Object.keys(tables).forEach((group) => {
-    standings[group] = tables[group].map((row) => row.team);
-  });
-  return standings;
 }
 
 function getFirst(standings, group) {
@@ -460,98 +505,11 @@ function getSecond(standings, group) {
   return standings[group]?.[1] || `2° ${group}`;
 }
 
-function decideWinner(home, away, score) {
-  if (!matchHasCompleteScore(score)) return null;
-  const homeGoals = Number(score.home);
-  const awayGoals = Number(score.away);
-  if (homeGoals === awayGoals) return null;
-  return homeGoals > awayGoals ? home : away;
-}
 
-function decideLoser(home, away, score) {
-  if (!matchHasCompleteScore(score)) return null;
-  const homeGoals = Number(score.home);
-  const awayGoals = Number(score.away);
-  if (homeGoals === awayGoals) return null;
-  return homeGoals > awayGoals ? away : home;
-}
 
-function buildResolvedTournamentMatches(scoreMap, importedMatches = {}) {
-  const standings = computeStandings(scoreMap);
-
-  const resolvedR16 = R16.map((match) => {
-    const imported = importedMatches[match.id] || {};
-    const home = cleanTeamName(imported.home || getFirst(standings, match.grpA));
-    const away = cleanTeamName(imported.away || getSecond(standings, match.grpB));
-    return enrichMatch({ ...match, home, away }, importedMatches);
-  });
-
-  const getR16Winner = (id) => {
-    const match = resolvedR16.find((item) => item.id === id);
-    return match ? decideWinner(match.home, match.away, scoreMap?.[id]) || `Ganador ${id}` : `Ganador ${id}`;
-  };
-
-  const resolvedQF = QF.map((match) => {
-    const imported = importedMatches[match.id] || {};
-    const home = cleanTeamName(imported.home || getR16Winner(match.r16A));
-    const away = cleanTeamName(imported.away || getR16Winner(match.r16B));
-    return enrichMatch({ ...match, home, away }, importedMatches);
-  });
-
-  const getQFWinner = (id) => {
-    const match = resolvedQF.find((item) => item.id === id);
-    return match ? decideWinner(match.home, match.away, scoreMap?.[id]) || `Ganador ${id}` : `Ganador ${id}`;
-  };
-
-  const resolvedSF = SF.map((match) => {
-    const imported = importedMatches[match.id] || {};
-    const home = cleanTeamName(imported.home || getQFWinner(match.qfA));
-    const away = cleanTeamName(imported.away || getQFWinner(match.qfB));
-    return enrichMatch({ ...match, home, away }, importedMatches);
-  });
-
-  const getSFWinner = (id) => {
-    const match = resolvedSF.find((item) => item.id === id);
-    return match ? decideWinner(match.home, match.away, scoreMap?.[id]) || `Ganador ${id}` : `Ganador ${id}`;
-  };
-
-  const getSFLoser = (id) => {
-    const match = resolvedSF.find((item) => item.id === id);
-    return match ? decideLoser(match.home, match.away, scoreMap?.[id]) || `Perdedor ${id}` : `Perdedor ${id}`;
-  };
-
-  const resolvedFinals = FINALS.map((match) => {
-    const imported = importedMatches[match.id] || {};
-    const home = cleanTeamName(imported.home || getSFWinner(match.sfA));
-    const away = cleanTeamName(imported.away || getSFWinner(match.sfB));
-    return enrichMatch({ ...match, home, away }, importedMatches);
-  });
-
-  const getFinalLoser = (id) => {
-    const match = resolvedFinals.find((item) => item.id === id);
-    return match ? decideLoser(match.home, match.away, scoreMap?.[id]) || `Perdedor ${id}` : `Perdedor ${id}`;
-  };
-
-  const resolvedThird = THIRD_PLACE.map((match) => {
-    const imported = importedMatches[match.id] || {};
-    const home = cleanTeamName(imported.home || getFinalLoser(match.finalA));
-    const away = cleanTeamName(imported.away || getFinalLoser(match.finalB));
-    return enrichMatch({ ...match, home, away }, importedMatches);
-  });
-
-  return {
-    standings,
-    groupTables: computeGroupTables(scoreMap),
-    groups: GROUP_MATCHES.map((match) => enrichMatch(match, importedMatches)),
-    r16: resolvedR16,
-    qf: resolvedQF,
-    sf: resolvedSF,
-    finals: resolvedFinals,
-    third: resolvedThird,
-    knockout: [...resolvedR16, ...resolvedQF, ...resolvedSF, ...resolvedFinals, ...resolvedThird],
-    all: [...GROUP_MATCHES.map((match) => enrichMatch(match, importedMatches)), ...resolvedR16, ...resolvedQF, ...resolvedSF, ...resolvedFinals, ...resolvedThird],
-  };
-}
+/* =============================
+   IMPORTACIÓN EXCEL
+============================= */
 
 function cleanTeamName(name) {
   if (!name) return "";
@@ -581,13 +539,22 @@ function getCellValue(sheet, XLSX, row, col) {
 
 function isValidMatchId(id) {
   const cleanId = String(id || "").trim().toUpperCase();
+
+  // IDs válidos del torneo completo:
+  // - Grupos: A01 ... L23
+  // - 16vos: R16-01 ... R16-16
+  // - 8vos: OF-01 ... OF-08
+  // - 4tos: QF-01 ... QF-04
+  // - Semis: SF-01 ... SF-02
+  // - 3er lugar: 3RO-01
+  // - Final: FINAL
   return (
     /^[A-L]\d{2}$/.test(cleanId) ||
     cleanId.startsWith("R16-") ||
+    cleanId.startsWith("OF-") ||
     cleanId.startsWith("QF-") ||
     cleanId.startsWith("SF-") ||
     cleanId === "FINAL" ||
-    cleanId === "FINAL2" ||
     cleanId === "3RO-01"
   );
 }
@@ -668,6 +635,20 @@ function readPhaseSheet(sheet, XLSX, options = {}) {
   return { bets, matches };
 }
 
+/**
+ * parseExcel
+ * ------------------------------------------------------------
+ * Lee el archivo del participante y devuelve:
+ * - name: nombre del jugador
+ * - bets: marcadores apostados por id de partido
+ * - importedMatches: metadatos visibles de partidos importados
+ *
+ * IMPORTANTE:
+ * Las hojas knockout pueden traer equipos por fórmula. La app toma
+ * los datos visibles como apoyo, pero el motor del torneo debe ser
+ * capaz de reconstruir llaves por lógica si estos valores no vienen
+ * resueltos por XLSX en navegador.
+ */
 function parseExcel(buffer, XLSX) {
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
 
@@ -699,6 +680,11 @@ function parseExcel(buffer, XLSX) {
     defaultStage: "Grupos",
   });
 
+  // IMPORTANTE:
+  // El archivo final del proyecto usa estas hojas reales:
+  // 1_GRUPOS, 2_16AVOS, 3_OCTAVOS, 4_CUARTOS, 5_SEMIS, 6_FINAL
+  // Si aquí usamos nombres antiguos, la app solo detecta grupos + 16vos
+  // y por eso se queda en 88 apuestas en lugar de cargar todo el flujo.
   const r16 = readPhaseSheet(workbook.Sheets["2_16AVOS"], XLSX, {
     startRow: 3,
     groupCol: 1,
@@ -714,7 +700,7 @@ function parseExcel(buffer, XLSX) {
     defaultStage: "16avos",
   });
 
-  const qf = readPhaseSheet(workbook.Sheets["3_CUARTOS"], XLSX, {
+  const of = readPhaseSheet(workbook.Sheets["3_OCTAVOS"], XLSX, {
     startRow: 3,
     groupCol: 1,
     homeCol: 2,
@@ -726,10 +712,25 @@ function parseExcel(buffer, XLSX) {
     timeCol: 7,
     stadiumCol: 8,
     cityCol: 9,
-    defaultStage: "Cuartos",
+    defaultStage: "8vos",
   });
 
-  const sf = readPhaseSheet(workbook.Sheets["4_SEMIS"], XLSX, {
+  const qf = readPhaseSheet(workbook.Sheets["4_CUARTOS"], XLSX, {
+    startRow: 3,
+    groupCol: 1,
+    homeCol: 2,
+    homeGoalsCol: 3,
+    awayGoalsCol: 4,
+    awayCol: 5,
+    phaseCol: 11,
+    dateCol: 6,
+    timeCol: 7,
+    stadiumCol: 8,
+    cityCol: 9,
+    defaultStage: "4tos",
+  });
+
+  const sf = readPhaseSheet(workbook.Sheets["5_SEMIS"], XLSX, {
     startRow: 3,
     groupCol: 1,
     homeCol: 2,
@@ -744,7 +745,7 @@ function parseExcel(buffer, XLSX) {
     defaultStage: "Semis",
   });
 
-  const finals = readPhaseSheet(workbook.Sheets["5_FINAL"], XLSX, {
+  const finals = readPhaseSheet(workbook.Sheets["6_FINAL"], XLSX, {
     startRow: 3,
     groupCol: 1,
     homeCol: 2,
@@ -764,6 +765,7 @@ function parseExcel(buffer, XLSX) {
     bets: {
       ...groups.bets,
       ...r16.bets,
+      ...of.bets,
       ...qf.bets,
       ...sf.bets,
       ...finals.bets,
@@ -771,6 +773,7 @@ function parseExcel(buffer, XLSX) {
     importedMatches: {
       ...groups.matches,
       ...r16.matches,
+      ...of.matches,
       ...qf.matches,
       ...sf.matches,
       ...finals.matches,
@@ -1093,6 +1096,12 @@ function HeaderHero({
                 <GhostButton onClick={onOpenAdmin}>
                   Admin
                 </GhostButton>
+
+                {isAdminView ? (
+                  <GhostButton onClick={onImport}>
+                    Cargar quiniela
+                  </GhostButton>
+                ) : null}
               </div>
 
               <div
@@ -1472,7 +1481,7 @@ const scoreInputStyle = {
 function getMatchesByDate(matchesMap, results, targetDate) {
   return Object.values(matchesMap || {}).filter((match) => {
     if (!match?.date) return false;
-    if (normalizeDateValue(match.date) !== normalizeDateValue(targetDate)) return false;
+    if (match.date !== targetDate) return false;
 
     const result = results?.[match.id];
     if (!result) return false;
@@ -1595,6 +1604,69 @@ function ScheduleSection({ title, matches, bets, results, isAdmin, onChange }) {
         ))}
       </div>
     </section>
+  );
+}
+
+/* =============================
+   COMPONENTES DE UI
+============================= */
+
+
+// Tabla compacta por grupo para el comparativo Apuesta vs Real.
+// Aquí sí mostramos banderas explícitamente porque el motor trabaja con nombres limpios
+// y no dependemos del Excel para la capa visual.
+function GroupMiniTable({ title, rows, accent = "#7dd3fc" }) {
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <div style={{ fontWeight: 800, color: accent, fontSize: 13, textTransform: "uppercase", letterSpacing: 0.4 }}>{title}</div>
+      <div style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "rgba(255,255,255,0.05)" }}>
+              {["Equipo", "PJ", "Pts", "DG", "GF"].map((h) => (
+                <th key={h} style={{ textAlign: "left", padding: "10px 12px", color: "#93c5fd", fontSize: 11 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(rows || []).map((row, index) => (
+              <tr key={row.team} style={{ borderTop: "1px solid rgba(255,255,255,0.05)", background: index < 2 ? "rgba(34,197,94,0.08)" : index === 2 ? "rgba(250,204,21,0.05)" : "transparent" }}>
+                <td style={{ padding: "10px 12px", fontWeight: 700 }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <span>{getFlag(row.team)}</span>
+                    <span>{row.team}</span>
+                  </span>
+                </td>
+                <td style={{ padding: "10px 12px" }}>{row.pj}</td>
+                <td style={{ padding: "10px 12px", fontWeight: 800 }}>{row.pts}</td>
+                <td style={{ padding: "10px 12px" }}>{row.gd}</td>
+                <td style={{ padding: "10px 12px" }}>{row.gf}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function GroupComparisonBoard({ predictedTables, officialTables }) {
+  return (
+    <div style={{ display: "grid", gap: 18, marginTop: 24 }}>
+      {Object.keys(GROUPS).map((group) => (
+        <Card key={group} style={{ padding: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>Grupo {group}</div>
+            <div style={{ color: "#94a3b8", fontSize: 13 }}>Comparativo de avance · apuesta vs realidad</div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+            <GroupMiniTable title="Apuesta" rows={predictedTables?.[group] || []} accent="#7dd3fc" />
+            <GroupMiniTable title="Real" rows={officialTables?.[group] || []} accent="#34d399" />
+          </div>
+        </Card>
+      ))}
+    </div>
   );
 }
 
@@ -1878,95 +1950,6 @@ function BracketCenter({ finalItem, thirdItem, onSetBet }) {
   );
 }
 
-
-function GroupComparisonBoard({ predictionMap, officialMap }) {
-  const predictedTables = computeGroupTables(predictionMap);
-  const officialTables = computeGroupTables(officialMap);
-
-  return (
-    <Card style={{ padding: 20, marginTop: 22 }}>
-      <div style={{ fontWeight: 800, fontSize: 22, marginBottom: 8 }}>
-        Grupos · apuesta vs realidad
-      </div>
-      <div style={{ color: "#94a3b8", marginBottom: 18 }}>
-        Cuadro comparativo por grupo usando puntos, diferencia de goles y goles a favor.
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
-        {Object.keys(GROUPS).map((group) => {
-          const predicted = predictedTables[group] || [];
-          const official = officialTables[group] || [];
-
-          const renderRows = (rows, accent) => (
-            <div style={{ display: "grid", gap: 6 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "24px 1fr repeat(4, 36px)", gap: 8, color: "#64748b", fontSize: 11, fontWeight: 700 }}>
-                <div>#</div><div>Equipo</div><div style={{textAlign:"center"}}>PTS</div><div style={{textAlign:"center"}}>DG</div><div style={{textAlign:"center"}}>GF</div><div style={{textAlign:"center"}}>PJ</div>
-              </div>
-              {rows.map((row, index) => (
-                <div key={row.team} style={{
-                  display: "grid",
-                  gridTemplateColumns: "24px 1fr repeat(4, 36px)",
-                  gap: 8,
-                  alignItems: "center",
-                  padding: "6px 8px",
-                  borderRadius: 10,
-                  background: index < 2 ? `${accent}16` : "rgba(255,255,255,0.02)",
-                }}>
-                  <div style={{ color: "#94a3b8", fontWeight: 800 }}>{index + 1}</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                    <span>{getFlag(row.team)}</span>
-                    <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 700 }}>{row.team}</span>
-                  </div>
-                  <div style={{ textAlign: "center", fontWeight: 700 }}>{row.pts}</div>
-                  <div style={{ textAlign: "center", color: "#94a3b8" }}>{row.gd}</div>
-                  <div style={{ textAlign: "center", color: "#94a3b8" }}>{row.gf}</div>
-                  <div style={{ textAlign: "center", color: "#94a3b8" }}>{row.played}</div>
-                </div>
-              ))}
-            </div>
-          );
-
-          return (
-            <div key={group} style={{
-              borderRadius: 18,
-              border: "1px solid rgba(255,255,255,0.08)",
-              background: "linear-gradient(180deg, rgba(15,23,42,0.86), rgba(7,11,20,0.96))",
-              padding: 14,
-            }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                <div style={{ fontWeight: 900, fontSize: 18 }}>Grupo {group}</div>
-                <div style={{ color: "#7dd3fc", fontSize: 12, fontWeight: 800 }}>Comparativo</div>
-              </div>
-
-              <div style={{ display: "grid", gap: 12 }}>
-                <div style={{
-                  borderRadius: 16,
-                  border: "1px solid rgba(52,211,153,0.18)",
-                  background: "rgba(52,211,153,0.05)",
-                  padding: 12,
-                }}>
-                  <div style={{ fontWeight: 800, marginBottom: 10, color: "#86efac" }}>Tu apuesta</div>
-                  {renderRows(predicted, "rgba(52,211,153,1)")}
-                </div>
-
-                <div style={{
-                  borderRadius: 16,
-                  border: "1px solid rgba(250,204,21,0.18)",
-                  background: "rgba(250,204,21,0.05)",
-                  padding: 12,
-                }}>
-                  <div style={{ fontWeight: 800, marginBottom: 10, color: "#fde68a" }}>Avance real</div>
-                  {renderRows(official, "rgba(250,204,21,1)")}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </Card>
-  );
-}
-
 function BracketView({ userBets, importedMatches = {}, onSetBet }) {
   const { isMobile } = useViewport();
   const standings = computeStandings(userBets);
@@ -1996,9 +1979,19 @@ function BracketView({ userBets, importedMatches = {}, onSetBet }) {
     return winnerFromBet(home, away, userBets[id]) || "?";
   };
 
+  const ofTeams = (id) => {
+    const match = OF.find((item) => item.id === id);
+    return [r16Winner(match.r16A), r16Winner(match.r16B)];
+  };
+
+  const ofWinner = (id) => {
+    const [home, away] = ofTeams(id);
+    return winnerFromBet(home, away, userBets[id]) || "?";
+  };
+
   const qfTeams = (id) => {
     const match = QF.find((item) => item.id === id);
-    return [r16Winner(match.r16A), r16Winner(match.r16B)];
+    return [ofWinner(match.ofA), ofWinner(match.ofB)];
   };
 
   const qfWinner = (id) => {
@@ -2029,6 +2022,14 @@ function BracketView({ userBets, importedMatches = {}, onSetBet }) {
     return { id: match.id, t1, t2, bet: userBets[match.id] || {}, winner: winnerFromBet(t1, t2, userBets[match.id]) };
   });
 
+  const ofItems = OF.map((match) => {
+    const [fallbackT1, fallbackT2] = ofTeams(match.id);
+    const imported = importedMatches[match.id] || {};
+    const t1 = imported.home || fallbackT1;
+    const t2 = imported.away || fallbackT2;
+    return { id: match.id, t1, t2, bet: userBets[match.id] || {}, winner: winnerFromBet(t1, t2, userBets[match.id]) };
+  });
+
   const qfItems = QF.map((match) => {
     const [fallbackT1, fallbackT2] = qfTeams(match.id);
     const imported = importedMatches[match.id] || {};
@@ -2047,16 +2048,18 @@ function BracketView({ userBets, importedMatches = {}, onSetBet }) {
 
   const leftR16 = r16Items.slice(0, 8);
   const rightR16 = r16Items.slice(8).reverse();
-  const leftQF = qfItems.slice(0, 4);
-  const rightQF = qfItems.slice(4).reverse();
-  const leftSF = sfItems.slice(0, 2);
-  const rightSF = sfItems.slice(2).reverse();
+  const leftOF = ofItems.slice(0, 4);
+  const rightOF = ofItems.slice(4).reverse();
+  const leftQF = qfItems.slice(0, 2);
+  const rightQF = qfItems.slice(2).reverse();
+  const leftSF = sfItems.slice(0, 1);
+  const rightSF = sfItems.slice(1).reverse();
 
   const leftSfId = leftSF[0]?.id || "SF-01";
-  const rightSfId = rightSF[0]?.id || "SF-03";
+  const rightSfId = rightSF[0]?.id || "SF-02";
 
   const importedFinal = importedMatches["FINAL"] || {};
-  const importedThird = importedMatches["3RO-01"] || importedMatches["FINAL2"] || {};
+  const importedThird = importedMatches["3RO-01"] || {};
 
   const finalTeam1 = importedFinal.home || sfWinner(leftSfId);
   const finalTeam2 = importedFinal.away || sfWinner(rightSfId);
@@ -2072,11 +2075,11 @@ function BracketView({ userBets, importedMatches = {}, onSetBet }) {
   };
 
   const thirdItem = {
-    id: importedMatches["3RO-01"] ? "3RO-01" : "FINAL2",
+    id: "3RO-01",
     t1: thirdTeam1,
     t2: thirdTeam2,
-    bet: userBets[importedMatches["3RO-01"] ? "3RO-01" : "FINAL2"] || {},
-    winner: winnerFromBet(thirdTeam1, thirdTeam2, userBets[importedMatches["3RO-01"] ? "3RO-01" : "FINAL2"]),
+    bet: userBets["3RO-01"] || {},
+    winner: winnerFromBet(thirdTeam1, thirdTeam2, userBets["3RO-01"]),
   };
 
   return (
@@ -2099,7 +2102,7 @@ function BracketView({ userBets, importedMatches = {}, onSetBet }) {
           <div style={{
             minWidth: isMobile ? 1440 : 1720,
             display: "grid",
-            gridTemplateColumns: "1.15fr 58px .95fr 58px .78fr 58px .95fr 58px .78fr 58px .95fr 58px 1.15fr",
+            gridTemplateColumns: "1.15fr 48px .98fr 48px .84fr 48px .68fr 68px .9fr 68px .68fr 48px .84fr 48px .98fr 48px 1.15fr",
             gap: 10,
             alignItems: "center"
           }}>
@@ -2111,15 +2114,22 @@ function BracketView({ userBets, importedMatches = {}, onSetBet }) {
             <ConnectorStack count={8} gap={12} side="right" />
 
             <div>
-              <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 12 }}>Cuartos · Lado A</div>
-              <BracketLane items={leftQF} onSetBet={onSetBet} gap={34} />
+              <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 12 }}>8vos · Lado A</div>
+              <BracketLane items={leftOF} onSetBet={onSetBet} gap={34} />
             </div>
 
             <ConnectorStack count={4} gap={34} side="right" />
 
             <div>
+              <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 12 }}>4tos · Lado A</div>
+              <BracketLane items={leftQF} onSetBet={onSetBet} gap={96} />
+            </div>
+
+            <ConnectorStack count={2} gap={96} side="right" />
+
+            <div>
               <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 12 }}>Semis · Lado A</div>
-              <BracketLane items={leftSF} onSetBet={onSetBet} gap={96} />
+              <BracketLane items={leftSF} onSetBet={onSetBet} gap={188} />
             </div>
 
             <CenterConnector side="left" />
@@ -2130,14 +2140,21 @@ function BracketView({ userBets, importedMatches = {}, onSetBet }) {
 
             <div>
               <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 12, textAlign: "right" }}>Semis · Lado B</div>
-              <BracketLane items={rightSF} onSetBet={onSetBet} gap={96} />
+              <BracketLane items={rightSF} onSetBet={onSetBet} gap={188} />
+            </div>
+
+            <ConnectorStack count={2} gap={96} side="left" />
+
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 12, textAlign: "right" }}>4tos · Lado B</div>
+              <BracketLane items={rightQF} onSetBet={onSetBet} gap={96} />
             </div>
 
             <ConnectorStack count={4} gap={34} side="left" />
 
             <div>
-              <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 12, textAlign: "right" }}>Cuartos · Lado B</div>
-              <BracketLane items={rightQF} onSetBet={onSetBet} gap={34} />
+              <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 12, textAlign: "right" }}>8vos · Lado B</div>
+              <BracketLane items={rightOF} onSetBet={onSetBet} gap={34} />
             </div>
 
             <ConnectorStack count={8} gap={12} side="left" />
@@ -2152,6 +2169,10 @@ function BracketView({ userBets, importedMatches = {}, onSetBet }) {
     </div>
   );
 }
+/* =============================
+   HOOKS / RESPONSIVE
+============================= */
+
 function useViewport() {
   const [width, setWidth] = React.useState(
     typeof window !== "undefined" ? window.innerWidth : 1280
@@ -2169,6 +2190,10 @@ function useViewport() {
     isTablet: width >= 768 && width < 1100,
   };
 }
+/* =============================
+   APP PRINCIPAL
+============================= */
+
 export default function App() {
   const { isMobile, isTablet } = useViewport();
   const [XLSX, setXLSX] = useState(null);
@@ -2181,9 +2206,9 @@ export default function App() {
   const [showImport, setShowImport] = useState(false);
   const [toast, setToast] = useState("");
   const [groupFilter, setGroupFilter] = useState("ALL");
-  const [calendarTab, setCalendarTab] = useState("groups");
-  const [adminFilter, setAdminFilter] = useState("ALL");
   const [bracketMode, setBracketMode] = useState(false);
+  const [calendarTab, setCalendarTab] = useState("groups");
+  const [adminPhaseFilter, setAdminPhaseFilter] = useState("GRUPOS");
   const lastSavedRef = useRef("");
   const [journeyDate, setJourneyDate] = useState("");
   const [latestJourney, setLatestJourney] = useState(null);
@@ -2256,8 +2281,10 @@ useEffect(() => {
   console.log("STORE CAMBIÓ:", store);
 }, [store]);
 
+  // Store normalizado
   const users = store.users || {};
   const bets = store.bets || {};
+  // results = resultados oficiales capturados por admin
   const results = store.results || {};
   const importedMatches = store.importedMatches || {};
   const totalPlayers = Object.keys(users).length;
@@ -2267,16 +2294,11 @@ useEffect(() => {
   
   const firstImportedUser = Object.keys(importedMatches)[0] || null;
 
-  const importedMatchesByActiveUser = activeUser
-    ? importedMatches[activeUser] || {}
-    : firstImportedUser
-      ? importedMatches[firstImportedUser] || {}
-      : {};
-
-  const officialTournament = useMemo(
-    () => buildResolvedTournamentMatches(results, importedMatchesByActiveUser),
-    [results, importedMatchesByActiveUser]
-  );
+const importedMatchesByActiveUser = activeUser
+  ? importedMatches[activeUser] || {}
+  : firstImportedUser
+    ? importedMatches[firstImportedUser] || {}
+    : {};
 
   const totals = useMemo(() => {
     return Object.keys(users)
@@ -2284,8 +2306,7 @@ useEffect(() => {
         let pts = 0;
         let exact = 0;
         let resultHits = 0;
-
-        ALL_TOURNAMENT_MATCHES.forEach((match) => {
+        GROUP_MATCHES.forEach((match) => {
           const score = calcScore(bets[user]?.[match.id], results[match.id]);
           if (score === 3) {
             pts += 3;
@@ -2295,10 +2316,9 @@ useEffect(() => {
             resultHits += 1;
           }
         });
-
         return { user, pts, exact, result: resultHits, color: users[user]?.color };
       })
-      .sort((a, b) => (b.pts - a.pts) || (b.exact - a.exact));
+      .sort((a, b) => b.pts - a.pts);
   }, [users, bets, results]);
 
   const setBet = (user, id, side, value) => {
@@ -2437,10 +2457,16 @@ async function removeJourney(journeyDate) {
   }
 }
 
-async function closeJourney(journeyDate) {
+  /**
+   * closeJourney
+   * ----------------------------------------------------------
+   * Cierra una jornada con base en una fecha, calcula el resumen
+   * del día y lo guarda en Firebase.
+   */
+  async function closeJourney(journeyDate) {
   try {
     const matchesOfDay = getMatchesByDate(
-      Object.fromEntries(officialTournament.all.map((match) => [match.id, match])),
+      importedMatchesByActiveUser,
       results,
       journeyDate
     );
@@ -2484,32 +2510,43 @@ async function closeJourney(journeyDate) {
 }
 
   const userBets = activeUser ? bets[activeUser] || {} : {};
-  const userProjectedTournament = useMemo(
-    () => buildResolvedTournamentMatches(userBets, importedMatchesByActiveUser),
-    [userBets, importedMatchesByActiveUser]
-  );
-
   const filteredGroupMatches = GROUP_MATCHES
     .filter((match) => groupFilter === "ALL" || match.group === groupFilter)
     .map((match) => enrichMatch(match, importedMatchesByActiveUser));
   const groupedSchedule = groupMatchesBySection(filteredGroupMatches);
 
-  const adminPhaseOptions = [
-    { key: "ALL", label: "Todo el torneo" },
-    { key: "Grupos", label: "Grupos" },
-    { key: "16avos", label: "16avos" },
-    { key: "Cuartos", label: "Cuartos" },
-    { key: "Semis", label: "Semis" },
-    { key: "Final", label: "Final" },
-    { key: "3er lugar", label: "3er lugar" },
-  ];
+  const predictedGroupTables = useMemo(() => computeGroupTablesDetailed(userBets), [userBets]);
+  const officialGroupTables = useMemo(() => computeGroupTablesDetailed(results), [results]);
 
-  const filteredAdminMatches = officialTournament.all.filter((match) => {
-    if (adminFilter === "ALL") return true;
-    return match.stage === adminFilter;
-  });
+  const referenceImportedMatches = firstImportedUser ? importedMatches[firstImportedUser] || {} : {};
+  const stageFinalIds = ["3RO-01", "FINAL"];
 
-  const groupedAdminSchedule = groupMatchesBySection(filteredAdminMatches);
+  const adminPhaseMatches = useMemo(() => {
+    const groups = GROUP_MATCHES.map((match) => ({ ...match, stageLabel: "Grupos" })).map((match) => enrichMatch(match, referenceImportedMatches));
+    const r16Matches = R16.map((match) => ({ ...match, stageLabel: "16vos" })).map((match) => enrichMatch(match, referenceImportedMatches));
+    const ofMatches = OF.map((match) => ({ ...match, stageLabel: "8vos" })).map((match) => enrichMatch(match, referenceImportedMatches));
+    const qfMatches = QF.map((match) => ({ ...match, stageLabel: "4tos" })).map((match) => enrichMatch(match, referenceImportedMatches));
+    const finalsMatches = stageFinalIds
+      .filter((id) => MATCH_META[id] || referenceImportedMatches[id] || results[id])
+      .map((id) => enrichMatch({ id, stageLabel: id === "3RO-01" ? "3er lugar" : "Final" }, referenceImportedMatches));
+
+    switch (adminPhaseFilter) {
+      case "GRUPOS":
+        return groups;
+      case "16VOS":
+        return r16Matches;
+      case "8VOS":
+        return ofMatches;
+      case "4TOS":
+        return qfMatches;
+      case "FINALES":
+        return finalsMatches;
+      default:
+        return [...groups, ...r16Matches, ...ofMatches, ...qfMatches, ...finalsMatches];
+    }
+  }, [adminPhaseFilter, referenceImportedMatches, results]);
+
+  const groupedAdminSchedule = groupMatchesBySection(adminPhaseMatches);
 
   return (
     <Shell>
@@ -2525,7 +2562,7 @@ async function closeJourney(journeyDate) {
             onImport={() => setShowImport(true)}
             onOpenAdmin={() => setView("adminLogin")}
             onOpenTable={() => setView("table")}
-            isAdminView={isAdminUnlocked}
+            isAdminView={view === "admin"}
           />
           <Container>
             <JourneySummaryCard summary={latestJourney} />
@@ -2616,43 +2653,27 @@ async function closeJourney(journeyDate) {
 
             {!bracketMode ? (
               <>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20, marginBottom: 12 }}>
-                  <GhostButton active={calendarTab === "groups"} onClick={() => setCalendarTab("groups")}>
-                    Grupos
-                  </GhostButton>
-                  <GhostButton active={calendarTab === "matches"} onClick={() => setCalendarTab("matches")}>
-                    Partidos
-                  </GhostButton>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 20 }}>
+                  <GhostButton active={calendarTab === "groups"} onClick={() => setCalendarTab("groups")}>Grupos</GhostButton>
+                  <GhostButton active={calendarTab === "matches"} onClick={() => setCalendarTab("matches")}>Partidos</GhostButton>
                 </div>
 
                 {calendarTab === "groups" ? (
                   <GroupComparisonBoard
-                    predictionMap={userBets}
-                    officialMap={results}
+                    predictedTables={predictedGroupTables}
+                    officialTables={officialGroupTables}
                   />
                 ) : (
                   <>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 4, marginBottom: 10 }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20 }}>
                       {["ALL", ...Object.keys(GROUPS)].map((group) => (
-                        <GhostButton
-                          key={group}
-                          active={groupFilter === group}
-                          onClick={() => setGroupFilter(group)}
-                        >
+                        <GhostButton key={group} active={groupFilter === group} onClick={() => setGroupFilter(group)}>
                           {group === "ALL" ? "Todos los grupos" : `Grupo ${group}`}
                         </GhostButton>
                       ))}
                     </div>
-
                     {groupedSchedule.map(([title, matches]) => (
-                      <ScheduleSection
-                        key={title}
-                        title={title}
-                        matches={matches}
-                        bets={userBets}
-                        results={results}
-                        onChange={(id, side, value) => setBet(activeUser, id, side, value)}
-                      />
+                      <ScheduleSection key={title} title={title} matches={matches} bets={userBets} results={results} onChange={(id, side, value) => setBet(activeUser, id, side, value)} />
                     ))}
                   </>
                 )}
@@ -2808,9 +2829,16 @@ async function closeJourney(journeyDate) {
 </Card>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 22 }}>
-        {adminPhaseOptions.map((phase) => (
-          <GhostButton key={phase.key} active={adminFilter === phase.key} onClick={() => setAdminFilter(phase.key)}>
-            {phase.label}
+        {[
+          ["GRUPOS", "Grupos"],
+          ["16VOS", "16vos"],
+          ["8VOS", "8vos"],
+          ["4TOS", "4tos"],
+          ["FINALES", "Final · 3er lugar"],
+          ["ALL", "Todo"],
+        ].map(([key, label]) => (
+          <GhostButton key={key} active={adminPhaseFilter === key} onClick={() => setAdminPhaseFilter(key)}>
+            {label}
           </GhostButton>
         ))}
       </div>
