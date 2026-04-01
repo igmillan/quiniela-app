@@ -46,6 +46,7 @@ import {
 
 const SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
 const ADMIN_PASSWORD = "mundial2026";
+const RANK_SNAPSHOT_KEY = "quiniela_rank_snapshot_v1";
 
 const GROUPS = {
   A: ["México", "Sudáfrica", "Corea del Sur", "Rep. Checa/Dinamarca*"],
@@ -271,6 +272,18 @@ const FINALS = [
 
 const FINAL_MATCHES = 2;
 const TOTAL_MATCHES = 104;
+
+// Reglamento oficial de puntuación.
+// El marcador exacto ya incluye el acierto de resultado: vale 3 puntos totales, no 4.
+const SCORING_RULES = {
+  result: 1,
+  exact: 3,
+  groupLeader: 5,
+  groupQualifiers: 10,
+  semifinalists: 30,
+  finalists: 35,
+  champion: 50,
+};
 
 const MATCH_META = buildDefaultMatchMeta();
 
@@ -504,6 +517,218 @@ function getFirst(standings, group) {
 function getSecond(standings, group) {
   return standings[group]?.[1] || `2° ${group}`;
 }
+
+function getThird(standings, group) {
+  return standings[group]?.[2] || `3° ${group}`;
+}
+
+function winnerFromScoreMap(team1, team2, score) {
+  if (!score || score.home === "" || score.away === "" || score.home === undefined || score.away === undefined) return null;
+  const h = Number(score.home);
+  const a = Number(score.away);
+  if (Number.isNaN(h) || Number.isNaN(a) || h === a) return null;
+  return h > a ? team1 : team2;
+}
+
+function loserFromScoreMap(team1, team2, score) {
+  if (!score || score.home === "" || score.away === "" || score.home === undefined || score.away === undefined) return null;
+  const h = Number(score.home);
+  const a = Number(score.away);
+  if (Number.isNaN(h) || Number.isNaN(a) || h === a) return null;
+  return h > a ? team2 : team1;
+}
+
+/**
+ * Resuelve el árbol eliminatorio a partir de un mapa de marcadores.
+ * Esta función se usa para comparar:
+ * - proyección del usuario
+ * - realidad oficial
+ *
+ * Mantiene la misma estructura del bracket visible en la app.
+ */
+function resolveTournamentFromScoreMap(scoreMap) {
+  const standings = computeStandings(scoreMap);
+
+  const r16 = R16.map((match) => {
+    const home = getFirst(standings, match.grpA);
+    const away = getSecond(standings, match.grpB);
+    return { id: match.id, home, away, winner: winnerFromScoreMap(home, away, scoreMap[match.id]) };
+  });
+
+  const r16ById = Object.fromEntries(r16.map((m) => [m.id, m]));
+
+  const of = OF.map((match) => {
+    const home = r16ById[match.r16A]?.winner || "?";
+    const away = r16ById[match.r16B]?.winner || "?";
+    return { id: match.id, home, away, winner: winnerFromScoreMap(home, away, scoreMap[match.id]) };
+  });
+
+  const ofById = Object.fromEntries(of.map((m) => [m.id, m]));
+
+  const qf = QF.map((match) => {
+    const home = ofById[match.ofA]?.winner || "?";
+    const away = ofById[match.ofB]?.winner || "?";
+    return { id: match.id, home, away, winner: winnerFromScoreMap(home, away, scoreMap[match.id]) };
+  });
+
+  const qfById = Object.fromEntries(qf.map((m) => [m.id, m]));
+
+  const sf = SF.map((match) => {
+    const home = qfById[match.qfA]?.winner || "?";
+    const away = qfById[match.qfB]?.winner || "?";
+    return {
+      id: match.id,
+      home,
+      away,
+      winner: winnerFromScoreMap(home, away, scoreMap[match.id]),
+      loser: loserFromScoreMap(home, away, scoreMap[match.id]),
+    };
+  });
+
+  const sfById = Object.fromEntries(sf.map((m) => [m.id, m]));
+
+  const final = {
+    id: "FINAL",
+    home: sfById["SF-01"]?.winner || "?",
+    away: sfById["SF-02"]?.winner || "?",
+    winner: winnerFromScoreMap(sfById["SF-01"]?.winner || "?", sfById["SF-02"]?.winner || "?", scoreMap["FINAL"]),
+  };
+
+  const third = {
+    id: "3RO-01",
+    home: sfById["SF-01"]?.loser || "?",
+    away: sfById["SF-02"]?.loser || "?",
+    winner: winnerFromScoreMap(sfById["SF-01"]?.loser || "?", sfById["SF-02"]?.loser || "?", scoreMap["3RO-01"]),
+  };
+
+  return { standings, r16, of, qf, sf, final, third };
+}
+
+function getPhaseMatchIds() {
+  return {
+    groups: GROUP_MATCHES.map((m) => m.id),
+    r16: R16.map((m) => m.id),
+    of: OF.map((m) => m.id),
+    qf: QF.map((m) => m.id),
+    sf: SF.map((m) => m.id),
+    finals: ["3RO-01", "FINAL"],
+  };
+}
+
+function countScoredMatches(scoreMap) {
+  return Object.values(scoreMap || {}).filter((bet) => bet && bet.home !== "" && bet.away !== "" && bet.home !== undefined && bet.away !== undefined).length;
+}
+
+function arraysEqualAsSet(a = [], b = []) {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort().join("|");
+  const sb = [...b].sort().join("|");
+  return sa === sb;
+}
+
+/**
+ * Calcula el score completo del usuario:
+ * - puntos por partido
+ * - bonos por grupos
+ * - bonos por semifinalistas/finalistas/campeón
+ */
+function computeUserScoreSummary(userScoreMap, officialScoreMap) {
+  const phaseIds = getPhaseMatchIds();
+  let matchPoints = 0;
+  let exact = 0;
+  let resultHits = 0;
+
+  const phaseBreakdown = {
+    groups: { points: 0, exact: 0, result: 0, evaluated: 0 },
+    r16: { points: 0, exact: 0, result: 0, evaluated: 0 },
+    of: { points: 0, exact: 0, result: 0, evaluated: 0 },
+    qf: { points: 0, exact: 0, result: 0, evaluated: 0 },
+    sf: { points: 0, exact: 0, result: 0, evaluated: 0 },
+    finals: { points: 0, exact: 0, result: 0, evaluated: 0 },
+  };
+
+  Object.entries(phaseIds).forEach(([phase, ids]) => {
+    ids.forEach((id) => {
+      const score = calcScore(userScoreMap?.[id], officialScoreMap?.[id]);
+      if (score === null) return;
+      phaseBreakdown[phase].evaluated += 1;
+      if (score === SCORING_RULES.exact) {
+        matchPoints += SCORING_RULES.exact;
+        exact += 1;
+        phaseBreakdown[phase].points += SCORING_RULES.exact;
+        phaseBreakdown[phase].exact += 1;
+      } else if (score === SCORING_RULES.result) {
+        matchPoints += SCORING_RULES.result;
+        resultHits += 1;
+        phaseBreakdown[phase].points += SCORING_RULES.result;
+        phaseBreakdown[phase].result += 1;
+      }
+    });
+  });
+
+  const predictedTables = computeGroupTablesDetailed(userScoreMap);
+  const officialTables = computeGroupTablesDetailed(officialScoreMap);
+
+  let groupLeaderBonus = 0;
+  let groupQualifiersBonus = 0;
+
+  Object.keys(GROUPS).forEach((group) => {
+    const p = predictedTables[group] || [];
+    const o = officialTables[group] || [];
+    if (p[0]?.team && o[0]?.team && p[0].team === o[0].team) {
+      groupLeaderBonus += SCORING_RULES.groupLeader;
+    }
+    const pQual = p.slice(0, 2).map((x) => x.team);
+    const oQual = o.slice(0, 2).map((x) => x.team);
+    if (arraysEqualAsSet(pQual, oQual)) {
+      groupQualifiersBonus += SCORING_RULES.groupQualifiers;
+    }
+  });
+
+  const predictedTournament = resolveTournamentFromScoreMap(userScoreMap);
+  const officialTournament = resolveTournamentFromScoreMap(officialScoreMap);
+
+  const predictedSemis = predictedTournament.sf.flatMap((m) => [m.home, m.away]).filter((x) => x && x !== "?");
+  const officialSemis = officialTournament.sf.flatMap((m) => [m.home, m.away]).filter((x) => x && x !== "?");
+  const semifinalBonus = arraysEqualAsSet(predictedSemis, officialSemis) ? SCORING_RULES.semifinalists : 0;
+
+  const predictedFinalists = [predictedTournament.final.home, predictedTournament.final.away].filter((x) => x && x !== "?");
+  const officialFinalists = [officialTournament.final.home, officialTournament.final.away].filter((x) => x && x !== "?");
+  const finalistsBonus = arraysEqualAsSet(predictedFinalists, officialFinalists) ? SCORING_RULES.finalists : 0;
+
+  const championBonus =
+    predictedTournament.final.winner &&
+    officialTournament.final.winner &&
+    predictedTournament.final.winner === officialTournament.final.winner
+      ? SCORING_RULES.champion
+      : 0;
+
+  const bonusPoints = groupLeaderBonus + groupQualifiersBonus + semifinalBonus + finalistsBonus + championBonus;
+  const total = matchPoints + bonusPoints;
+  const evaluated = Object.values(phaseBreakdown).reduce((acc, item) => acc + item.evaluated, 0);
+
+  return {
+    pts: total,
+    matchPoints,
+    bonusPoints,
+    exact,
+    result: resultHits,
+    evaluated,
+    loaded: countScoredMatches(userScoreMap),
+    accuracy: evaluated ? Math.round(((exact + resultHits) / evaluated) * 100) : 0,
+    groupLeaderBonus,
+    groupQualifiersBonus,
+    semifinalBonus,
+    finalistsBonus,
+    championBonus,
+    phaseBreakdown,
+    predictedTables,
+    officialTables,
+    predictedTournament,
+    officialTournament,
+  };
+}
+
 
 
 
@@ -1368,27 +1593,32 @@ function SummaryTable({ totals, users, bets, onOpenUser }) {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "rgba(255,255,255,0.04)" }}>
-              {["#", "Participante", "Pts", "Exactos", "Resultado", "Cargados"].map((heading) => (
+              {["#", "Participante", "Pts", "Exactos", "Resultado", "Tendencia", "Cargados"].map((heading) => (
                 <th key={heading} style={{ textAlign: "left", padding: "14px 16px", color: "#93c5fd", fontSize: 12, letterSpacing: 0.4 }}>{heading}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {totals.map((row, index) => (
-              <tr key={row.user} onClick={() => onOpenUser(row.user)} style={{ cursor: "pointer", borderTop: "1px solid rgba(255,255,255,0.05)", background: index === 0 ? "rgba(250,204,21,0.06)" : "transparent" }}>
-                <td style={{ padding: 16, fontWeight: 800 }}>{index + 1}</td>
-                <td style={{ padding: 16 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <Dot color={users[row.user]?.color} />
-                    <strong>{row.user}</strong>
-                  </div>
-                </td>
-                <td style={{ padding: 16, color: "#34d399", fontWeight: 800 }}>{row.pts}</td>
-                <td style={{ padding: 16 }}>{row.exact}</td>
-                <td style={{ padding: 16 }}>{row.result}</td>
-                <td style={{ padding: 16, color: "#94a3b8" }}>{Object.keys(bets[row.user] || {}).length}/{TOTAL_MATCHES}</td>
-              </tr>
-            ))}
+            {totals.map((row, index) => {
+              const movement = getMovementMeta(row.movement || 0);
+              const podiumBg = index === 0 ? "rgba(250,204,21,0.08)" : index === 1 ? "rgba(226,232,240,0.06)" : index === 2 ? "rgba(251,146,60,0.06)" : "transparent";
+              return (
+                <tr key={row.user} onClick={() => onOpenUser(row.user)} style={{ cursor: "pointer", borderTop: "1px solid rgba(255,255,255,0.05)", background: podiumBg }}>
+                  <td style={{ padding: 16, fontWeight: 800 }}>{index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : index + 1}</td>
+                  <td style={{ padding: 16 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <Dot color={users[row.user]?.color} />
+                      <strong>{row.user}</strong>
+                    </div>
+                  </td>
+                  <td style={{ padding: 16, color: "#34d399", fontWeight: 800 }}>{row.pts}</td>
+                  <td style={{ padding: 16 }}>{row.exact}</td>
+                  <td style={{ padding: 16 }}>{row.result}</td>
+                  <td style={{ padding: 16, color: movement.color }}>{movement.icon} {movement.text}</td>
+                  <td style={{ padding: 16, color: "#94a3b8" }}>{Object.keys(bets[row.user] || {}).length}/{TOTAL_MATCHES}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1670,6 +1900,199 @@ function GroupComparisonBoard({ predictedTables, officialTables }) {
   );
 }
 
+
+function ScoreRulesCard({ compact = false }) {
+  return (
+    <Card style={{ padding: compact ? 16 : 20 }}>
+      <div style={{ fontWeight: 800, fontSize: compact ? 16 : 18, marginBottom: 12 }}>Reglamento de puntuación</div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {[
+          ["Resultado correcto", `${SCORING_RULES.result} pt`],
+          ["Marcador exacto", `${SCORING_RULES.exact} pts totales`],
+          ["Líder de grupo", `${SCORING_RULES.groupLeader} pts por grupo`],
+          ["2 clasificados del grupo", `${SCORING_RULES.groupQualifiers} pts por grupo`],
+          ["4 semifinalistas", `${SCORING_RULES.semifinalists} pts`],
+          ["2 finalistas", `${SCORING_RULES.finalists} pts`],
+          ["Campeón", `${SCORING_RULES.champion} pts`],
+        ].map(([label, value]) => (
+          <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+            <span style={{ color: "#cbd5e1" }}>{label}</span>
+            <strong style={{ color: "#f8fafc" }}>{value}</strong>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function DashboardKpi({ label, value, accent = "#34d399", sublabel = "" }) {
+  return (
+    <Card style={{ padding: 18 }}>
+      <div style={{ color: "#94a3b8", fontSize: 12, marginBottom: 8 }}>{label}</div>
+      <div style={{ color: accent, fontWeight: 800, fontSize: 28, lineHeight: 1 }}>{value}</div>
+      {sublabel ? <div style={{ color: "#64748b", fontSize: 12, marginTop: 8 }}>{sublabel}</div> : null}
+    </Card>
+  );
+}
+
+function PhaseBreakdownCard({ breakdown }) {
+  const labels = {
+    groups: "Grupos",
+    r16: "16vos",
+    of: "8vos",
+    qf: "4tos",
+    sf: "Semis",
+    finals: "Finales",
+  };
+
+  return (
+    <Card style={{ padding: 20 }}>
+      <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 14 }}>Desempeño por fase</div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {Object.entries(labels).map(([key, label]) => {
+          const row = breakdown?.[key] || { points: 0, exact: 0, result: 0, evaluated: 0 };
+          return (
+            <div key={key} style={{ display: "grid", gridTemplateColumns: "1.3fr .7fr .7fr .7fr .7fr", gap: 10, alignItems: "center", padding: "10px 12px", borderRadius: 14, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div style={{ fontWeight: 700 }}>{label}</div>
+              <div><span style={{ color: "#94a3b8", fontSize: 12 }}>Pts</span><div style={{ fontWeight: 800 }}>{row.points}</div></div>
+              <div><span style={{ color: "#94a3b8", fontSize: 12 }}>Exactos</span><div style={{ fontWeight: 800 }}>{row.exact}</div></div>
+              <div><span style={{ color: "#94a3b8", fontSize: 12 }}>Resultado</span><div style={{ fontWeight: 800 }}>{row.result}</div></div>
+              <div><span style={{ color: "#94a3b8", fontSize: 12 }}>Eval.</span><div style={{ fontWeight: 800 }}>{row.evaluated}</div></div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function RankingContextCard({ totals, activeUser }) {
+  const idx = totals.findIndex((item) => item.user === activeUser);
+  const around = totals.slice(Math.max(0, idx - 2), Math.min(totals.length, idx + 3));
+
+  return (
+    <Card style={{ padding: 20 }}>
+      <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 14 }}>Tu contexto en la tabla</div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {around.map((row) => {
+          const position = totals.findIndex((item) => item.user === row.user) + 1;
+          const medal = position === 1 ? "🥇" : position === 2 ? "🥈" : position === 3 ? "🥉" : `#${position}`;
+          const movement = getMovementMeta(row.movement || 0);
+          return (
+            <div key={row.user} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: 14, background: row.user === activeUser ? "rgba(34,197,94,0.12)" : "rgba(255,255,255,0.03)", border: row.user === activeUser ? "1px solid rgba(34,197,94,0.35)" : "1px solid rgba(255,255,255,0.06)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <strong>{medal}</strong>
+                <Dot color={row.color} />
+                <span>{row.user}</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ color: movement.color, fontSize: 12 }}>{movement.icon} {movement.text}</span>
+                <strong style={{ color: "#34d399" }}>{row.pts} pts</strong>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function UserDashboard({ summary, totals, activeUser }) {
+  const rank = Math.max(1, totals.findIndex((item) => item.user === activeUser) + 1);
+  const movement = getMovementMeta(summary.movement || 0);
+
+  return (
+    <div style={{ display: "grid", gap: 18, marginTop: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+        <DashboardKpi label="Posición" value={`#${rank}`} accent="#facc15" sublabel={`${movement.icon} ${movement.text}`} />
+        <DashboardKpi label="Puntos totales" value={summary.pts} accent="#34d399" sublabel={`${summary.matchPoints} por partidos + ${summary.bonusPoints} en bonos`} />
+        <DashboardKpi label="Exactos" value={summary.exact} accent="#7dd3fc" />
+        <DashboardKpi label="Resultado" value={summary.result} accent="#c084fc" />
+        <DashboardKpi label="Efectividad" value={`${summary.accuracy}%`} accent="#fb7185" />
+        <DashboardKpi label="Evaluados" value={`${summary.evaluated}/${TOTAL_MATCHES}`} accent="#f97316" />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 18 }}>
+        <PhaseBreakdownCard breakdown={summary.phaseBreakdown} />
+        <RankingContextCard totals={totals} activeUser={activeUser} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 18 }}>
+        <Card style={{ padding: 20 }}>
+          <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 14 }}>Bonos conseguidos</div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {[
+              ["Líderes de grupo", summary.groupLeaderBonus],
+              ["Clasificados de grupo", summary.groupQualifiersBonus],
+              ["Semifinalistas", summary.semifinalBonus],
+              ["Finalistas", summary.finalistsBonus],
+              ["Campeón", summary.championBonus],
+            ].map(([label, value]) => (
+              <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "10px 12px", borderRadius: 14, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                <span>{label}</span>
+                <strong style={{ color: value ? "#34d399" : "#94a3b8" }}>{value} pts</strong>
+              </div>
+            ))}
+          </div>
+        </Card>
+        <InsightsCard summary={summary} />
+      </div>
+
+      <ScoreRulesCard />
+    </div>
+  );
+}
+
+
+function getMovementMeta(movement) {
+  if (movement > 0) return { icon: "🔼", text: `Subiste ${movement}`, color: "#34d399" };
+  if (movement < 0) return { icon: "🔽", text: `Bajaste ${Math.abs(movement)}`, color: "#f87171" };
+  return { icon: "➖", text: "Sin cambio", color: "#94a3b8" };
+}
+
+function InsightsCard({ summary }) {
+  const phaseLabels = {
+    groups: "Grupos",
+    r16: "16vos",
+    of: "8vos",
+    qf: "4tos",
+    sf: "Semis",
+    finals: "Finales",
+  };
+
+  const bestPhase = Object.entries(summary?.phaseBreakdown || {}).sort((a, b) => (b[1]?.points || 0) - (a[1]?.points || 0))[0];
+  const bonusCount = [
+    summary?.groupLeaderBonus,
+    summary?.groupQualifiersBonus,
+    summary?.semifinalBonus,
+    summary?.finalistsBonus,
+    summary?.championBonus,
+  ].filter((x) => Number(x) > 0).length;
+
+  const insights = [
+    bestPhase ? `Tu mejor fase hasta ahora es ${phaseLabels[bestPhase[0]]} con ${bestPhase[1].points} pts.` : "Aún no hay fases evaluadas para calcular tu mejor tramo.",
+    summary?.exact ? `Llevas ${summary.exact} marcadores exactos, que son los que más valor generan en la tabla.` : "Aún no tienes marcadores exactos; ahí está la mayor oportunidad de crecer.",
+    summary?.championBonus
+      ? "¡Ya acertaste al campeón según el estado actual del torneo!"
+      : "Tu apuesta al campeón sigue siendo la llave de mayor valor del torneo.",
+    bonusCount
+      ? `Ya activaste ${bonusCount} bloque(s) de bonus en la quiniela.`
+      : "Todavía no activas bonos grandes; grupos y fases finales pueden cambiar tu posición rápido.",
+  ];
+
+  return (
+    <Card style={{ padding: 20 }}>
+      <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 14 }}>Insights automáticos</div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {insights.map((item, index) => (
+          <div key={index} style={{ padding: "12px 14px", borderRadius: 14, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            {item}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
 function JourneySummaryCard({ summary }) {
   if (!summary) return null;
 
@@ -2208,10 +2631,18 @@ export default function App() {
   const [groupFilter, setGroupFilter] = useState("ALL");
   const [bracketMode, setBracketMode] = useState(false);
   const [calendarTab, setCalendarTab] = useState("groups");
+  const [userSection, setUserSection] = useState("dashboard");
   const [adminPhaseFilter, setAdminPhaseFilter] = useState("GRUPOS");
   const lastSavedRef = useRef("");
   const [journeyDate, setJourneyDate] = useState("");
   const [latestJourney, setLatestJourney] = useState(null);
+  const [previousRankMap, setPreviousRankMap] = useState(() => {
+    try {
+      return JSON.parse(window.localStorage.getItem(RANK_SNAPSHOT_KEY) || "{}");
+    } catch {
+      return {};
+    }
+  });
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
 
   useEffect(() => {
@@ -2303,23 +2734,33 @@ const importedMatchesByActiveUser = activeUser
   const totals = useMemo(() => {
     return Object.keys(users)
       .map((user) => {
-        let pts = 0;
-        let exact = 0;
-        let resultHits = 0;
-        GROUP_MATCHES.forEach((match) => {
-          const score = calcScore(bets[user]?.[match.id], results[match.id]);
-          if (score === 3) {
-            pts += 3;
-            exact += 1;
-          } else if (score === 1) {
-            pts += 1;
-            resultHits += 1;
-          }
-        });
-        return { user, pts, exact, result: resultHits, color: users[user]?.color };
+        const summary = computeUserScoreSummary(bets[user] || {}, results || {});
+        return {
+          user,
+          ...summary,
+          color: users[user]?.color,
+        };
       })
       .sort((a, b) => b.pts - a.pts);
   }, [users, bets, results]);
+
+  const totalsWithMovement = useMemo(() => {
+    return totals.map((row, index) => {
+      const currentRank = index + 1;
+      const prevRank = previousRankMap[row.user];
+      const movement = typeof prevRank === "number" ? prevRank - currentRank : 0;
+      return { ...row, rank: currentRank, movement };
+    });
+  }, [totals, previousRankMap]);
+
+  useEffect(() => {
+    if (!totals.length) return;
+    const snapshot = Object.fromEntries(totals.map((row, index) => [row.user, index + 1]));
+    try {
+      window.localStorage.setItem(RANK_SNAPSHOT_KEY, JSON.stringify(snapshot));
+      setPreviousRankMap((prev) => (Object.keys(prev).length ? prev : snapshot));
+    } catch {}
+  }, [totals]);
 
   const setBet = (user, id, side, value) => {
     setStore((current) => ({
@@ -2394,6 +2835,7 @@ const importedMatchesByActiveUser = activeUser
 
   const goToUser = (name) => {
     setActiveUser(name);
+    setUserSection("dashboard");
     setView("user");
   };
 
@@ -2567,7 +3009,7 @@ async function removeJourney(journeyDate) {
           <Container>
             <JourneySummaryCard summary={latestJourney} />
             <div style={{ display: "grid", gridTemplateColumns: isMobile || isTablet ? "1fr" : "1.15fr 0.85fr", gap: 18 }}>
-              <SummaryTable totals={totals} users={users} bets={bets} onOpenUser={goToUser} />
+              <SummaryTable totals={totalsWithMovement} users={users} bets={bets} onOpenUser={goToUser} />
               <div style={{ display: "grid", gap: 18 }}>
                 <ParticipantList users={users} onOpenUser={goToUser} />
                 <Card style={{ padding: 20 }}>
@@ -2632,55 +3074,60 @@ async function removeJourney(journeyDate) {
           <TopBar
             left={<BackButton onClick={() => setView("home")} />}
             center={<div style={{ display: "flex", alignItems: "center", gap: 10 }}><Dot color={users[activeUser]?.color} /><strong>{activeUser}</strong></div>}
-            right={<div style={{ display: "flex", gap: 8 }}><GhostButton active={!bracketMode} onClick={() => setBracketMode(false)}>Calendario</GhostButton><GhostButton active={bracketMode} onClick={() => setBracketMode(true)}>Bracket</GhostButton></div>}
+            right={
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <GhostButton active={userSection === "dashboard"} onClick={() => setUserSection("dashboard")}>Dashboard</GhostButton>
+                <GhostButton active={userSection === "calendar"} onClick={() => setUserSection("calendar")}>Calendario</GhostButton>
+                <GhostButton active={userSection === "bracket"} onClick={() => setUserSection("bracket")}>Bracket</GhostButton>
+              </div>
+            }
           />
           <Container>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 22 }}>
-              {(() => {
-                const row = totals.find((item) => item.user === activeUser) || { pts: 0, exact: 0, result: 0 };
-                const rank = Math.max(1, totals.findIndex((item) => item.user === activeUser) + 1);
-                return (
-                  <>
-                    <StatChip label="Puntos" value={row.pts} accent="#34d399" />
-                    <StatChip label="Posición" value={`#${rank}`} accent="#facc15" />
-                    <StatChip label="Exactos" value={row.exact} accent="#7dd3fc" />
-                    <StatChip label="Resultado" value={row.result} accent="#c084fc" />
-                    <StatChip label="Cargados" value={`${Object.keys(userBets).length}/${TOTAL_MATCHES}`} accent="#fda4af" />
-                  </>
-                );
-              })()}
-            </div>
+            {(() => {
+              const row = totalsWithMovement.find((item) => item.user === activeUser) || computeUserScoreSummary(userBets, results);
+              return (
+                <>
+                  {userSection === "dashboard" ? (
+                    <UserDashboard summary={row} totals={totalsWithMovement} activeUser={activeUser} />
+                  ) : userSection === "calendar" ? (
+                    <>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 20 }}>
+                        <GhostButton active={calendarTab === "groups"} onClick={() => setCalendarTab("groups")}>Grupos</GhostButton>
+                        <GhostButton active={calendarTab === "matches"} onClick={() => setCalendarTab("matches")}>Partidos</GhostButton>
+                      </div>
 
-            {!bracketMode ? (
-              <>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 20 }}>
-                  <GhostButton active={calendarTab === "groups"} onClick={() => setCalendarTab("groups")}>Grupos</GhostButton>
-                  <GhostButton active={calendarTab === "matches"} onClick={() => setCalendarTab("matches")}>Partidos</GhostButton>
-                </div>
-
-                {calendarTab === "groups" ? (
-                  <GroupComparisonBoard
-                    predictedTables={predictedGroupTables}
-                    officialTables={officialGroupTables}
-                  />
-                ) : (
-                  <>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20 }}>
-                      {["ALL", ...Object.keys(GROUPS)].map((group) => (
-                        <GhostButton key={group} active={groupFilter === group} onClick={() => setGroupFilter(group)}>
-                          {group === "ALL" ? "Todos los grupos" : `Grupo ${group}`}
-                        </GhostButton>
-                      ))}
+                      {calendarTab === "groups" ? (
+                        <>
+                          <ScoreRulesCard compact />
+                          <GroupComparisonBoard
+                            predictedTables={predictedGroupTables}
+                            officialTables={officialGroupTables}
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 20 }}>
+                            {["ALL", ...Object.keys(GROUPS)].map((group) => (
+                              <GhostButton key={group} active={groupFilter === group} onClick={() => setGroupFilter(group)}>
+                                {group === "ALL" ? "Todos los grupos" : `Grupo ${group}`}
+                              </GhostButton>
+                            ))}
+                          </div>
+                          {groupedSchedule.map(([title, matches]) => (
+                            <ScheduleSection key={title} title={title} matches={matches} bets={userBets} results={results} onChange={(id, side, value) => setBet(activeUser, id, side, value)} />
+                          ))}
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ marginTop: 20 }}>
+                      <ScoreRulesCard compact />
+                      <BracketView userBets={userBets} importedMatches={importedMatchesByActiveUser} onSetBet={(id, side, value) => setBet(activeUser, id, side, value)} />
                     </div>
-                    {groupedSchedule.map(([title, matches]) => (
-                      <ScheduleSection key={title} title={title} matches={matches} bets={userBets} results={results} onChange={(id, side, value) => setBet(activeUser, id, side, value)} />
-                    ))}
-                  </>
-                )}
-              </>
-            ) : (
-              <BracketView userBets={userBets} importedMatches={importedMatchesByActiveUser} onSetBet={(id, side, value) => setBet(activeUser, id, side, value)} />
-            )}
+                  )}
+                </>
+              );
+            })()}
           </Container>
         </>
       ) : null}
@@ -2863,7 +3310,7 @@ async function removeJourney(journeyDate) {
           <TopBar left={<BackButton onClick={() => setView("home")} />} center={<strong>Tabla general</strong>} right={<div />} />
           <Container>
             <div style={{ marginTop: 24 }}>
-              <SummaryTable totals={totals} users={users} bets={bets} onOpenUser={goToUser} />
+              <SummaryTable totals={totalsWithMovement} users={users} bets={bets} onOpenUser={goToUser} />
             </div>
           </Container>
         </>
