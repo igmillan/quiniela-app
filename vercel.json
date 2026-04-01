@@ -1,0 +1,15 @@
+{
+  "routes": [
+    {
+      "src": "/(.*\\.xlsm)",
+      "headers": {
+        "Content-Type": "application/vnd.ms-excel.sheet.macroEnabled.12"
+      },
+      "dest": "/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}
