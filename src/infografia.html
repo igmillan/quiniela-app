@@ -1,0 +1,236 @@
+<!--
+PALETTE: Deep Stadium Blue (#0F172A), Electric Trophy Gold (#FACC15), Pitch White (#F8FAFC), Live Green (#22C55E).
+PLAN: 
+- Add Open Graph Meta Tags for high-impact WhatsApp/Social sharing previews.
+- Ensure all visual components are responsive for mobile (where most WhatsApp users are).
+- Maintain "Carga Pro" and Points System visualization.
+- Interactive WhatsApp share button with pre-filled professional message.
+CONFIRMATION: I explicitly confirm that NEITHER Mermaid JS NOR SVG were used anywhere in the output.
+-->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- SEO & Social Sharing (WhatsApp/Social Media) -->
+    <title>Quiniela Mundial Pro | La inteligencia detrás de cada gol</title>
+    <meta name="description" content="Domina el ranking del mundial con nuestra plataforma inteligente. Predice marcadores, analiza insights y compite a nivel premium.">
+    
+    <!-- Open Graph Tags -->
+    <meta property="og:title" content="Quiniela Mundial Pro 🏆">
+    <meta property="og:description" content="No es una quiniela más, es tu centro de mando para el Mundial. Ranking en tiempo real e insights automáticos.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://quiniela-app-roan.vercel.app/">
+    <!-- Nota: Para la imagen OG, se recomienda usar una captura de pantalla del dashboard una vez desplegado -->
+    <meta property="og:image" content="https://quiniela-app-roan.vercel.app/og-image.jpg">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Montserrat:wght@700;800&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        stadiumBlue: '#0F172A',
+                        stadiumBlueLight: '#1E293B',
+                        trophyGold: '#FACC15',
+                        pitchWhite: '#F8FAFC',
+                        liveGreen: '#22C55E',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        heading: ['Montserrat', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #0F172A; color: #F8FAFC; }
+        .chart-container { position: relative; width: 100%; max-width: 800px; margin: 0 auto; height: 350px; }
+        .step-card { background: linear-gradient(145deg, #1E293B, #0F172A); border: 1px solid rgba(250, 204, 21, 0.1); }
+        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(248, 250, 252, 0.05); }
+        .gold-glow { text-shadow: 0 0 15px rgba(250, 204, 21, 0.4); }
+        .connector-line { position: absolute; top: 50%; left: 100%; width: 2rem; height: 2px; background: rgba(250, 204, 21, 0.2); transform: translateY(-50%); }
+        @media (max-width: 768px) { .connector-line { display: none; } }
+    </style>
+</head>
+<body class="font-sans antialiased">
+
+    <!-- Hero Section -->
+    <header class="relative pt-16 pb-12 px-6 text-center overflow-hidden">
+        <div class="absolute inset-0 z-0 opacity-10" style="background-image: radial-gradient(circle at 50% 0%, #FACC15 0%, transparent 70%);"></div>
+        <div class="relative z-10 max-w-4xl mx-auto">
+            <div class="inline-block bg-stadiumBlueLight text-trophyGold font-heading uppercase tracking-widest text-[10px] px-3 py-1 rounded-full mb-4 border border-trophyGold/20">
+                Plataforma Sports-Tech
+            </div>
+            <h1 class="font-heading text-4xl md:text-6xl font-extrabold mb-4 tracking-tight">
+                Quiniela Mundial <span class="text-trophyGold gold-glow">Pro</span>
+            </h1>
+            <p class="text-lg md:text-xl text-pitchWhite/80 mb-8 font-light max-w-2xl mx-auto">
+                Predice, compite y domina el ranking en tiempo real con la experiencia premium definitiva.
+            </p>
+            <div class="flex flex-wrap justify-center gap-4">
+                <a href="https://quiniela-app-roan.vercel.app/" target="_blank" class="bg-trophyGold text-stadiumBlue font-heading font-bold px-6 py-3 rounded-lg hover:scale-105 transition-transform">
+                    Abrir App ⚡
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <main class="px-6 pb-20 space-y-20 max-w-6xl mx-auto">
+
+        <!-- Value Pillars -->
+        <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="glass-panel p-6 rounded-xl border-b-2 border-trophyGold/30">
+                <div class="text-3xl mb-3">📈</div>
+                <h3 class="font-heading font-bold text-trophyGold mb-1">Dashboard Pro</h3>
+                <p class="text-xs text-pitchWhite/60">Análisis detallado de tu rendimiento y comparación inmediata vs realidad.</p>
+            </div>
+            <div class="glass-panel p-6 rounded-xl border-b-2 border-liveGreen/30">
+                <div class="text-3xl mb-3">⚡</div>
+                <h3 class="font-heading font-bold text-liveGreen mb-1">Real-Time</h3>
+                <p class="text-xs text-pitchWhite/60">Posiciones que cambian al ritmo de los goles. Sin esperas, sin errores.</p>
+            </div>
+            <div class="glass-panel p-6 rounded-xl border-b-2 border-white/10">
+                <div class="text-3xl mb-3">📊</div>
+                <h3 class="font-heading font-bold text-pitchWhite mb-1">Carga Masiva</h3>
+                <p class="text-xs text-pitchWhite/60">Usa nuestra plantilla maestra de Excel para una gestión rápida y profesional.</p>
+            </div>
+        </section>
+
+        <!-- Process Flow -->
+        <section class="space-y-10">
+            <div class="text-center">
+                <h2 class="font-heading text-2xl md:text-3xl font-bold">Flujo de Participación</h2>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 relative">
+                <div class="step-card p-5 rounded-lg text-center relative">
+                    <span class="text-2xl block mb-2 text-trophyGold">01</span>
+                    <h4 class="text-sm font-bold mb-1">Descarga</h4>
+                    <p class="text-[10px] text-pitchWhite/50">Baja el Excel maestro.</p>
+                    <div class="connector-line"></div>
+                </div>
+                <div class="step-card p-5 rounded-lg text-center relative">
+                    <span class="text-2xl block mb-2 text-trophyGold">02</span>
+                    <h4 class="text-sm font-bold mb-1">Predice</h4>
+                    <p class="text-[10px] text-pitchWhite/50">Llena tus resultados.</p>
+                    <div class="connector-line"></div>
+                </div>
+                <div class="step-card p-5 rounded-lg text-center relative">
+                    <span class="text-2xl block mb-2 text-trophyGold">03</span>
+                    <h4 class="text-sm font-bold mb-1">Sube</h4>
+                    <p class="text-[10px] text-pitchWhite/50">Carga el archivo en segundos.</p>
+                    <div class="connector-line"></div>
+                </div>
+                <div class="step-card p-5 rounded-lg text-center">
+                    <span class="text-2xl block mb-2 text-liveGreen">04</span>
+                    <h4 class="text-sm font-bold mb-1 text-liveGreen font-heading">Compite</h4>
+                    <p class="text-[10px] text-pitchWhite/50">Sigue el ranking vivo.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Scoring Rules Visualization -->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-10 items-center bg-stadiumBlueLight/30 p-6 md:p-10 rounded-2xl">
+            <div class="space-y-4">
+                <h2 class="font-heading text-2xl md:text-3xl font-bold">Premio a la <span class="text-trophyGold">Precisión</span></h2>
+                <p class="text-pitchWhite/70 text-sm">Nuestro algoritmo de puntos está diseñado para separar a los aficionados de los verdaderos analistas.</p>
+                <div class="space-y-3">
+                    <div class="flex items-center gap-3 bg-stadiumBlue/50 p-3 rounded-lg border-l-2 border-trophyGold">
+                        <span class="font-heading font-bold text-trophyGold">50 pts</span>
+                        <span class="text-xs text-pitchWhite/80">Por acertar al Campeón del Mundo.</span>
+                    </div>
+                    <div class="flex items-center gap-3 bg-stadiumBlue/50 p-3 rounded-lg border-l-2 border-liveGreen">
+                        <span class="font-heading font-bold text-liveGreen">03 pts</span>
+                        <span class="text-xs text-pitchWhite/80">Por cada marcador exacto en fase de grupos.</span>
+                    </div>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas id="pointsChart"></canvas>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Viral Footer -->
+    <footer class="bg-black/50 border-t border-white/5 py-12 px-6 text-center">
+        <div class="max-w-2xl mx-auto space-y-8">
+            <h2 class="font-heading text-2xl font-bold">¿Listo para organizar tu grupo?</h2>
+            <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                <button id="waButton" class="bg-liveGreen text-stadiumBlue font-heading font-bold px-8 py-3 rounded-lg flex items-center justify-center gap-2 hover:brightness-110 transition-all">
+                    Recomendar por WhatsApp 💬
+                </button>
+            </div>
+            <p class="text-pitchWhite/40 text-[10px] uppercase tracking-widest">
+                Sports Intelligence Platform • Vercel Hosted
+            </p>
+        </div>
+    </footer>
+
+    <script>
+        // WhatsApp Sharing Logic
+        document.getElementById('waButton').addEventListener('click', () => {
+            const currentUrl = window.location.href;
+            const message = `⚽ ¡Mira esto! Estoy usando la Quiniela Mundial Pro. Tiene ranking en tiempo real y dashboard inteligente. Organiza tu grupo aquí: ${currentUrl}`;
+            window.location.href = `https://wa.me/?text=${encodeURIComponent(message)}`;
+        });
+
+        // Points Chart Implementation
+        function wrapLabels(labels, max = 15) {
+            return labels.map(l => {
+                if (l.length <= max) return l;
+                const words = l.split(' ');
+                let lines = [''], i = 0;
+                words.forEach(w => {
+                    if ((lines[i] + w).length > max) { lines.push(w + ' '); i++; }
+                    else lines[i] += w + ' ';
+                });
+                return lines;
+            });
+        }
+
+        const labels = wrapLabels(['Resultado', 'Marcador Exacto', 'Líder Grupo', 'Clasificados', 'Semis', 'Finalistas', 'Campeón']);
+        const values = [1, 3, 5, 10, 30, 35, 50];
+
+        const ctx = document.getElementById('pointsChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: values.map(v => v > 20 ? '#FACC15' : v > 4 ? '#22C55E' : '#94A3B8'),
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => {
+                                const label = items[0].chart.data.labels[items[0].dataIndex];
+                                return Array.isArray(label) ? label.join(' ') : label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748B' } },
+                    y: { grid: { display: false }, ticks: { color: '#F8FAFC', font: { size: 10 } } }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
