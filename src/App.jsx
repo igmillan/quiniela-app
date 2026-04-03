@@ -50,17 +50,17 @@ const ADMIN_PASSWORD = "mundial2026";
 const RANK_SNAPSHOT_KEY = "quiniela_rank_snapshot_v1";
 
 const GROUPS = {
-  A: ["México", "Sudáfrica", "Corea del Sur", "Rep. Checa/Dinamarca*"],
+  A: ["México", "Sudáfrica", "Corea del Sur", "Rep. Checa"],
   B: ["Canadá", "Bosnia/Italia*", "Qatar", "Suiza"],
   C: ["Brasil", "Marruecos", "Haití", "Escocia"],
-  D: ["Estados Unidos", "Paraguay", "Australia", "Kosovo/Turquía*"],
+  D: ["Estados Unidos", "Paraguay", "Australia", "Turquía"],
   E: ["Alemania", "Curazao", "Costa de Marfil", "Ecuador"],
-  F: ["Países Bajos", "Japón", "Suecia/Polonia*", "Túnez"],
+  F: ["Países Bajos", "Japón", "Suecia", "Túnez"],
   G: ["Bélgica", "Egipto", "Irán", "Nueva Zelanda"],
   H: ["España", "Cabo Verde", "Arabia Saudita", "Uruguay"],
-  I: ["Francia", "Senegal", "Bolivia/Irak*", "Noruega"],
+  I: ["Francia", "Senegal", "Irak", "Noruega"],
   J: ["Argentina", "Argelia", "Austria", "Jordania"],
-  K: ["Portugal", "Jamaica/RD Congo*", "Uzbekistán", "Colombia"],
+  K: ["Portugal", "RD Congo", "Uzbekistán", "Colombia"],
   L: ["Inglaterra", "Croacia", "Ghana", "Panamá"],
 };
 
