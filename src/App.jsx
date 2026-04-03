@@ -51,7 +51,7 @@ const RANK_SNAPSHOT_KEY = "quiniela_rank_snapshot_v1";
 
 const GROUPS = {
   A: ["México", "Sudáfrica", "Corea del Sur", "Rep. Checa"],
-  B: ["Canadá", "Bosnia/Italia*", "Qatar", "Suiza"],
+  B: ["Canadá", "Bosnia", "Qatar", "Suiza"],
   C: ["Brasil", "Marruecos", "Haití", "Escocia"],
   D: ["Estados Unidos", "Paraguay", "Australia", "Turquía"],
   E: ["Alemania", "Curazao", "Costa de Marfil", "Ecuador"],
